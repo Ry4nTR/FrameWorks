@@ -65,7 +65,7 @@ ABaseCharacter::ABaseCharacter(const FObjectInitializer& ObjectInitializer)
 	// Standard character capsule (matches the default ACharacter physics setup).
 	GetCapsuleComponent()->InitCapsuleSize(34.0f, 88.0f);
 
-	// Rotation is owned by the movement component (see SetFaceControlRotation / bOrientRotationToFlight).
+	// Rotation is owned by the movement component (see SetFaceControlRotation and the control modes).
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
 	bUseControllerRotationRoll = false;
@@ -174,6 +174,12 @@ UBaseCharacterMovementComponent* ABaseCharacter::GetBaseMovement() const
 	return Cast<UBaseCharacterMovementComponent>(GetCharacterMovement());
 }
 
+bool ABaseCharacter::IsGroundDomain() const
+{
+	const UBaseCharacterMovementComponent* Movement = GetBaseMovement();
+	return !Movement || Movement->GetMovementDomain() == EMovementDomain::Ground;
+}
+
 // ----------------------------------------------------------------------
 // Possession and input setup
 // ----------------------------------------------------------------------
@@ -240,26 +246,22 @@ void ABaseCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	{
 		Input->BindAction(Actions.Jump, ETriggerEvent::Started, this, &ABaseCharacter::Input_JumpStarted);
 		Input->BindAction(Actions.Jump, ETriggerEvent::Triggered, this, &ABaseCharacter::Input_JumpHeld);
-		Input->BindAction(Actions.Jump, ETriggerEvent::Completed, this, &ABaseCharacter::Input_JumpCompleted);
+		Input->BindAction(Actions.Jump, ETriggerEvent::Completed, this, &ABaseCharacter::Input_JumpEnded);
 	}
 	if (Actions.Crouch)
 	{
 		Input->BindAction(Actions.Crouch, ETriggerEvent::Started, this, &ABaseCharacter::Input_CrouchStarted);
 		Input->BindAction(Actions.Crouch, ETriggerEvent::Triggered, this, &ABaseCharacter::Input_CrouchHeld);
-		Input->BindAction(Actions.Crouch, ETriggerEvent::Completed, this, &ABaseCharacter::Input_CrouchCompleted);
+		Input->BindAction(Actions.Crouch, ETriggerEvent::Completed, this, &ABaseCharacter::Input_CrouchEnded);
 	}
 	if (Actions.Sprint)
 	{
 		Input->BindAction(Actions.Sprint, ETriggerEvent::Started, this, &ABaseCharacter::Input_SprintStarted);
-		Input->BindAction(Actions.Sprint, ETriggerEvent::Completed, this, &ABaseCharacter::Input_SprintCompleted);
+		Input->BindAction(Actions.Sprint, ETriggerEvent::Completed, this, &ABaseCharacter::Input_SprintEnded);
 	}
 	if (Actions.Fly)
 	{
 		Input->BindAction(Actions.Fly, ETriggerEvent::Started, this, &ABaseCharacter::Input_Fly);
-	}
-	if (Actions.Swim)
-	{
-		Input->BindAction(Actions.Swim, ETriggerEvent::Triggered, this, &ABaseCharacter::Input_SwimHeld);
 	}
 	if (Actions.Dash)
 	{
@@ -279,12 +281,6 @@ void ABaseCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 // Input handlers
 // ----------------------------------------------------------------------
 
-bool ABaseCharacter::IsInNonGroundDomain() const
-{
-	const UBaseCharacterMovementComponent* Movement = GetBaseMovement();
-	return Movement && Movement->GetMovementDomain() != EMovementDomain::Ground;
-}
-
 void ABaseCharacter::Input_Move(const FInputActionValue& Value)
 {
 	const FVector2D Axis = Value.Get<FVector2D>();
@@ -293,9 +289,12 @@ void ABaseCharacter::Input_Move(const FInputActionValue& Value)
 		return;
 	}
 
-	// On the ground movement is flat. In Fly and Water the camera pitch steers the character.
+	// The movement component decides how the camera steers:
+	//   Ground and Standard (Fly / Water): camera yaw only, so pitch never changes the direction.
+	//   Camera Steering (Sprint held in Fly / Water): full camera orientation, pitch included.
 	const FRotator ControlRotation = Controller->GetControlRotation();
-	const FRotator Basis = IsInNonGroundDomain() ? ControlRotation : FRotator(0.0f, ControlRotation.Yaw, 0.0f);
+	const UBaseCharacterMovementComponent* Movement = GetBaseMovement();
+	const FRotator Basis = Movement ? Movement->GetMoveBasisRotation(ControlRotation) : FRotator(0.0f, ControlRotation.Yaw, 0.0f);
 	const FRotationMatrix BasisMatrix(Basis);
 
 	AddMovementInput(BasisMatrix.GetUnitAxis(EAxis::X), Axis.Y);
@@ -311,29 +310,50 @@ void ABaseCharacter::Input_Look(const FInputActionValue& Value)
 
 void ABaseCharacter::Input_JumpStarted(const FInputActionValue& Value)
 {
-	if (!IsInNonGroundDomain())
+	UBaseCharacterMovementComponent* Movement = GetBaseMovement();
+	if (!Movement)
 	{
+		Jump();
+		return;
+	}
+
+	// Fly and Water: Jump is the Up button and acts while held (Input_JumpHeld). Nothing to do on press.
+	if (Movement->GetMovementDomain() != EMovementDomain::Ground)
+	{
+		return;
+	}
+
+	if (bDoubleJumpActivatesFlight && Movement->bEnableFlyDomain && Movement->IsFalling())
+	{
+		// Airborne and Jump pressed again: take off.
+		Movement->SetWantsToFly(true);
+	}
+	else
+	{
+		// Grounded: standard jump. Also the fallback when flight is unavailable, so multi-jump setups keep working.
 		Jump();
 	}
 }
 
 void ABaseCharacter::Input_JumpHeld(const FInputActionValue& Value)
 {
-	// Fly and Water: Jump is "ascend" while held.
-	if (IsInNonGroundDomain())
+	// Standard mode in Fly / Water: ascend straight up. Ignored on the ground and while Sprint is held.
+	const UBaseCharacterMovementComponent* Movement = GetBaseMovement();
+	if (Movement && Movement->AcceptsVerticalButtons())
 	{
 		AddMovementInput(FVector::UpVector, 1.0f);
 	}
 }
 
-void ABaseCharacter::Input_JumpCompleted(const FInputActionValue& Value)
+void ABaseCharacter::Input_JumpEnded(const FInputActionValue& Value)
 {
 	StopJumping();
 }
 
 void ABaseCharacter::Input_CrouchStarted(const FInputActionValue& Value)
 {
-	if (!IsInNonGroundDomain())
+	// Crouch exists on the ground only. In Fly / Water the same button is the Down button (Input_CrouchHeld).
+	if (IsGroundDomain())
 	{
 		Crouch();
 	}
@@ -341,28 +361,31 @@ void ABaseCharacter::Input_CrouchStarted(const FInputActionValue& Value)
 
 void ABaseCharacter::Input_CrouchHeld(const FInputActionValue& Value)
 {
-	// Fly and Water: Crouch is "descend" while held.
-	if (IsInNonGroundDomain())
+	// Standard mode in Fly / Water: descend straight down. Ignored on the ground and while Sprint is held.
+	const UBaseCharacterMovementComponent* Movement = GetBaseMovement();
+	if (Movement && Movement->AcceptsVerticalButtons())
 	{
 		AddMovementInput(FVector::UpVector, -1.0f);
 	}
 }
 
-void ABaseCharacter::Input_CrouchCompleted(const FInputActionValue& Value)
+void ABaseCharacter::Input_CrouchEnded(const FInputActionValue& Value)
 {
 	UnCrouch();
 }
 
 void ABaseCharacter::Input_SprintStarted(const FInputActionValue& Value)
 {
+	// On the ground: run. In Fly / Water: switch to Camera Steering with the fast speed.
 	if (UBaseCharacterMovementComponent* Movement = GetBaseMovement())
 	{
 		Movement->SetWantsToSprint(true);
 	}
 }
 
-void ABaseCharacter::Input_SprintCompleted(const FInputActionValue& Value)
+void ABaseCharacter::Input_SprintEnded(const FInputActionValue& Value)
 {
+	// Back to walking, or back to Standard control in Fly / Water.
 	if (UBaseCharacterMovementComponent* Movement = GetBaseMovement())
 	{
 		Movement->SetWantsToSprint(false);
@@ -374,16 +397,6 @@ void ABaseCharacter::Input_Fly(const FInputActionValue& Value)
 	if (UBaseCharacterMovementComponent* Movement = GetBaseMovement())
 	{
 		Movement->ToggleFlying();
-	}
-}
-
-void ABaseCharacter::Input_SwimHeld(const FInputActionValue& Value)
-{
-	// Dive while held. Outside the Water domain the action does nothing.
-	const UBaseCharacterMovementComponent* Movement = GetBaseMovement();
-	if (Movement && Movement->GetMovementDomain() == EMovementDomain::Water)
-	{
-		AddMovementInput(FVector::UpVector, -1.0f);
 	}
 }
 
@@ -564,8 +577,9 @@ void ABaseCharacter::UpdateStateMachine()
 		{
 			LastWaterZone = EWaterZone::None;
 
+			// Glide is the Camera Steering flight (Sprint held) while actually moving. Standing still shows Idle.
 			const bool bMoving = Velocity.SizeSquared() > ThresholdSquared;
-			if (Movement->IsGliding())
+			if (bMoving && Movement->IsGliding())
 			{
 				State = TAG_Frameworks_State_Fly_Glide.GetTag();
 			}

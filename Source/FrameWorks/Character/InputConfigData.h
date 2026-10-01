@@ -3,7 +3,10 @@
 //
 // One data asset holds the mapping context and every input action the BaseCharacter can bind.
 // Leave an action empty and the character simply skips that binding, so a game without
-// flying, swimming, dash or dodge needs no code changes.
+// flying, dash or dodge needs no code changes.
+//
+// There is deliberately no swim action: swimming starts and ends automatically when the character
+// enters or leaves a PhysicsVolume with bWaterVolume enabled.
 
 #pragma once
 
@@ -28,31 +31,39 @@ struct FRAMEWORKS_API FCharacterInputActions
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Locomotion")
 	TObjectPtr<UInputAction> Look = nullptr;
 
-	/** Ground: jump. Fly and Water: ascend while held. */
+	/**
+	 * Ground: jump. Press again while airborne to take off (double-jump flight).
+	 * Fly and Water in Standard mode: ascend while held. Ignored while Sprint is held in Fly or Water.
+	 * Keep the default (no) trigger: the held event must fire every frame.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Locomotion")
 	TObjectPtr<UInputAction> Jump = nullptr;
 
-	/** Ground: crouch while held. Fly and Water: descend while held. */
+	/**
+	 * Ground: crouch while held.
+	 * Fly and Water in Standard mode: descend while held. Ignored while Sprint is held in Fly or Water.
+	 * Keep the default (no) trigger: the held event must fire every frame.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Locomotion")
 	TObjectPtr<UInputAction> Crouch = nullptr;
 
-	/** Hold. Ground: run. Fly: glide. Water: fast swim. */
+	/**
+	 * Hold. Ground: run.
+	 * Fly and Water: switches from Standard control to Camera Steering (full 3D movement along the camera,
+	 * including pitch) and uses the fast speed (glide / fast swim).
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Locomotion")
 	TObjectPtr<UInputAction> Sprint = nullptr;
 
-	/** Press to toggle flight on and off. */
+	/** Press to toggle flight on and off. Flight can also be started by pressing Jump while airborne. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Domains")
 	TObjectPtr<UInputAction> Fly = nullptr;
-
-	/** Hold to dive while in the Water domain. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Domains")
-	TObjectPtr<UInputAction> Swim = nullptr;
 
 	/** Press. Burst of speed along the input direction (domain dependent). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Actions")
 	TObjectPtr<UInputAction> Dash = nullptr;
 
-	/** Press. Evasive move: roll on the ground, sidestep in flight. */
+	/** Press. Evasive move: roll on the ground, side-step in flight. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Actions")
 	TObjectPtr<UInputAction> Dodge = nullptr;
 

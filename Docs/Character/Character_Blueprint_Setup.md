@@ -38,12 +38,11 @@ In `Input`, right-click > **Input > Input Action** for each row.
 | `IA_Crouch` | Digital (bool) |
 | `IA_Sprint` | Digital (bool) |
 | `IA_Fly` | Digital (bool) |
-| `IA_Swim` | Digital (bool) |
 | `IA_Dash` | Digital (bool) |
 | `IA_Dodge` | Digital (bool) |
 | `IA_PerspectiveToggle` | Digital (bool) |
 
-Leave the **Triggers** list of every action empty. That gives the "fires every frame while held" behavior that `Jump`, `Crouch` and `Swim` need, and the `Started` event that the other actions use.
+Leave the **Triggers** list of every action empty. That gives the "fires every frame while held" behavior that `Jump` and `Crouch` need, and the `Started` event that the other actions use.
 
 ## Step 4 - Create the Mapping Context
 
@@ -60,7 +59,6 @@ Right-click > **Input > Input Mapping Context**, name it `IMC_Character`, then a
 | `IA_Crouch` | `Left Ctrl` | (none) |
 | `IA_Sprint` | `Left Shift` | (none) |
 | `IA_Fly` | `F` | (none) |
-| `IA_Swim` | `C` | (none) |
 | `IA_Dash` | `Q` | (none) |
 | `IA_Dodge` | `E` | (none) |
 | `IA_PerspectiveToggle` | `V` | (none) |
@@ -83,14 +81,15 @@ Gamepad is added the same way. For the left stick on `IA_Move` use *Gamepad Left
 | Actions > Crouch | `IA_Crouch` |
 | Actions > Sprint | `IA_Sprint` |
 | Actions > Fly | `IA_Fly` |
-| Actions > Swim | `IA_Swim` |
 | Actions > Dash | `IA_Dash` |
 | Actions > Dodge | `IA_Dodge` |
 | Actions > Perspective Toggle | `IA_PerspectiveToggle` |
 
 4. Right-click the asset > **Asset Actions > Validate**. It must report success. Errors name any missing context, Move or Look.
 
-Leave an action empty to remove that feature from the game. For a ground-only game, clear Fly, Swim, and the water and flight actions you do not use.
+**Migrating from the earlier version:** the `Swim` entry no longer exists. After you compile, open `DA_InputConfig_Default` and confirm it opens without it. Delete `IA_Swim` and remove its `C` mapping from `IMC_Character`. Nothing new has to be added to the Input Config. Swimming works through Water Volumes (see `Movement_Blueprint_Setup.md`, Step 6).
+
+Leave an action empty to remove that feature from the game. For a ground-only game, clear Fly and any Dash or Dodge you do not use. There is nothing to clear for swimming: it has no input and works through Water Volumes placed in the level.
 
 ## Step 6 - Create the character Blueprint
 
@@ -114,6 +113,7 @@ Leave an action empty to remove that feature from the game. For a ground-only ga
 | Category | Property | Value |
 |---|---|---|
 | Character > Input | Input Config | `DA_InputConfig_Default` |
+| Character > Input | Double Jump Activates Flight | on (pressing Jump while airborne starts flight; off keeps it a plain jump) |
 | Character > Camera | Default Perspective | First Person or Third Person |
 | Character > Camera | Allow Perspective Toggle | on (off locks the view) |
 | Character > Camera | First Person Camera Socket Name | `head` (UE5 mannequin) or your head bone/socket |
@@ -139,7 +139,11 @@ Leave an action empty to remove that feature from the game. For a ground-only ga
 | `V` again | Third person returns, arms hidden |
 | `Left Shift` while moving | Faster movement (Run) |
 | `Left Ctrl` | Crouch |
-| `F` | Takes off (if flight is enabled); `Space` ascends, `Left Ctrl` descends |
+| `Space` again while in the air | Flight starts (if the Fly domain is enabled) |
+| `F` | Toggles flight on the ground or in the air |
+| Flying, W with the camera tilted up or down, no Shift | Stays level; `Space` ascends and `Left Ctrl` descends |
+| Flying, hold `Left Shift` + W, camera tilted up or down | Climbs or dives along the camera; `Space` and `Left Ctrl` are ignored |
+| Walk into a Water Volume | Swimming starts on its own (no key); the same Standard / Shift rules apply |
 | `Q` / `E` | Dash / Dodge |
 
 ## Step 9 - Test multiplayer
@@ -168,7 +172,7 @@ Leave an action empty to remove that feature from the game. For a ground-only ga
 | No input at all | Step 1 classes are wrong, `Input Config` is empty, or the mapping context asset is not set inside the data asset. Check the Output Log for the "Input is disabled" warning. |
 | Look is inverted | The Y-only Negate modifier is missing on the mouse mapping. |
 | `W` and `S` move sideways | The Swizzle Input Axis Values modifier is missing on the `Move` mappings. |
-| Ascend or descend only nudges once | `IA_Jump`, `IA_Crouch` or `IA_Swim` has a *Pressed* trigger. Remove it. |
+| Ascend or descend only nudges once | `IA_Jump` or `IA_Crouch` has a *Pressed* trigger. Remove it. |
 | First-person camera is on the floor | The `head` socket or bone is missing on the mesh. Change *First Person Camera Socket Name*. |
 | Both body and arms are visible in first person | The body is not the `Mesh` component of this character, or the arms mesh is missing its owner-only flag (it is set by default; check you did not override it). |
 | You see no character at all | The view is first person and no mesh is assigned to `FirstPersonMesh`. Assign the arms mesh, or press `V` for third person. |

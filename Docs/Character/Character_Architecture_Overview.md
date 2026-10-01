@@ -104,18 +104,31 @@ In the editor, *Validate* on the asset reports an error when `DefaultMappingCont
 
 | Action | Value | Trigger events used | Effect |
 |---|---|---|---|
-| `Move` | Axis2D (X right, Y forward) | Triggered | Ground: flat movement along the camera yaw. Fly and Water: movement along the full camera rotation (pitch steers). |
+| `Move` | Axis2D (X right, Y forward) | Triggered | Direction comes from the movement component: camera **yaw only** on the ground and in Standard mode; the **full camera rotation, pitch included**, while Sprint is held in Fly or Water (Camera Steering). |
 | `Look` | Axis2D (X yaw, Y pitch) | Triggered | Controller yaw and pitch input. Negate Y in the mapping context for standard mouse look. |
-| `Jump` | Digital | Started, Triggered, Completed | Ground: `Jump()` on press, `StopJumping()` on release. Fly and Water: ascend while held. |
-| `Crouch` | Digital | Started, Triggered, Completed | Ground: crouch while held. Fly and Water: descend while held. |
-| `Sprint` | Digital | Started, Completed | Sets the movement component's sprint intent. Means Run (Ground), Glide (Fly), Fast Swim (Water). |
+| `Jump` | Digital | Started, Triggered, Ended | Ground, grounded: `Jump()`. Ground, **falling**: starts flight (`bDoubleJumpActivatesFlight`). Fly and Water, Standard mode: ascend while held. Ignored as a vertical button while Sprint is held. |
+| `Crouch` | Digital | Started, Triggered, Ended | Ground: crouch while held. Fly and Water, Standard mode: descend while held. Ignored as a vertical button while Sprint is held. |
+| `Sprint` | Digital | Started, Ended | Sets the movement component's sprint intent. Ground: Run. Fly and Water: switches to Camera Steering with the fast speed (Glide, Fast Swim). |
 | `Fly` | Digital | Started | Toggles flight. |
-| `Swim` | Digital | Triggered | Dive (descend) while held in the Water domain. Inert elsewhere. |
 | `Dash` | Digital | Started | `RequestDash()` on the movement component. |
 | `Dodge` | Digital | Started | `RequestDodge()`: roll on the ground, side-step in flight. |
 | `PerspectiveToggle` | Digital | Started | `TogglePerspective()`. |
 
-`Jump`, `Crouch` and `Swim` rely on the **Triggered** event firing every frame while the key is held. Keep them on the default (no) trigger or a *Down* trigger. A *Pressed* trigger would fire once and give a single-frame ascend or dive.
+**There is no swim action.** Swimming starts and ends automatically when the character enters or leaves a `PhysicsVolume` with `bWaterVolume` enabled.
+
+`Jump` and `Crouch` rely on the **Triggered** event firing every frame while the key is held. Keep them on the default (no) trigger or a *Down* trigger. A *Pressed* trigger would fire once and give a single-frame ascend or descend.
+
+### 5.2.1 Input routing
+
+The character only forwards input. The movement component decides what it means:
+
+| Question | Answered by |
+|---|---|
+| Which rotation turns `Move` into a world direction? | `GetMoveBasisRotation(ControlRotation)`: yaw only, or yaw and pitch in Camera Steering |
+| Do the Up / Down buttons apply right now? | `AcceptsVerticalButtons()`: true in Fly or Water in Standard mode |
+| Is the character falling (double-jump takeoff)? | `IsFalling()` on the movement component |
+
+Full matrix: `Movement_Input_Routing.md`.
 
 ### 5.3 Mapping context lifecycle
 
@@ -177,7 +190,7 @@ The movement domain is pushed with `SetDomain`: Ground, Fly or Water, taken from
 | Ground | no input, or horizontal speed at or below `MovingSpeedThreshold` | `Ground.Idle` |
 | Ground | sprinting | `Ground.Run` |
 | Ground | otherwise | `Ground.Walk` |
-| Fly | gliding | `Fly.Glide` |
+| Fly | Sprint held (Camera Steering) with glide enabled, and moving | `Fly.Glide` |
 | Fly | 3D speed above `MovingSpeedThreshold` | `Fly.Move` |
 | Fly | otherwise | `Fly.Idle` |
 | Water, underwater | resurfacing (rising without dive input) | `Water.Resurfacing` |
@@ -241,8 +254,8 @@ RPCs:
 |---|---|
 | `InputConfig` not set | A warning is logged and no input is bound. The character still spawns, moves under AI and replicates. |
 | An action is empty in `InputConfig` | That single binding is skipped. |
-| Fly disabled on the movement component | The Fly input toggles nothing. Jump and Crouch never become ascend and descend because the domain is never Fly. |
-| Water disabled on the movement component | The character cannot enter water movement. The Swim input does nothing. |
+| Fly disabled on the movement component | The Fly input toggles nothing, and the second Jump press while airborne is an ordinary jump again. Jump and Crouch never become ascend and descend because the domain is never Fly. |
+| Water disabled on the movement component | The character cannot enter water movement, even inside a Water Volume. |
 | No state machine (a C++ child uses `DoNotCreateDefaultSubobject(TEXT("StateMachine"))`) | `UpdateStateMachine` and action forwarding return immediately. Movement and input are unaffected. |
 | No first-person mesh asset assigned | First person shows only the camera view. |
 | The `head` socket is missing on the third-person mesh | The first-person camera sits at the mesh origin. Set `FirstPersonCameraSocketName` to an existing socket or bone. |

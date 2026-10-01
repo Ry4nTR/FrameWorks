@@ -2,13 +2,15 @@
 
 Target: Unreal Engine 5.8 | Module macro: `FRAMEWORKS_API` | Files: `BaseCharacterMovementComponent.h/.cpp`
 
+For a one-page summary of domain transitions and input routing see `Movement_Input_Routing.md`.
+
 ---
 
 ## 1. Purpose
 
-`UBaseCharacterMovementComponent` extends `UCharacterMovementComponent` with three movement **domains** (Ground, Fly, Water), a set of predicted actions (Sprint, Fly toggle, Dash, Dodge), glide, and a rotation policy that supports both upright and flight-aligned bodies.
+`UBaseCharacterMovementComponent` extends `UCharacterMovementComponent` with three movement **domains** (Ground, Fly, Water), two **control modes** for Fly and Water (Standard and Camera Steering), a set of predicted actions (Sprint, Fly toggle, Dash, Dodge), and a rotation policy that keeps the body upright or lets it tilt toward the movement vector.
 
-It is fully independent. It does not include or reference the State Machine or Animation frameworks. It exposes plain facts and one C++ event, and `ABaseCharacter` connects those to the rest of the library.
+It is fully independent. It does not include or reference the State Machine or Animation frameworks. It exposes plain facts, input helpers and one C++ event, and `ABaseCharacter` connects those to the rest of the library.
 
 Dependencies: `Core`, `CoreUObject`, `Engine` only.
 
@@ -18,11 +20,13 @@ Dependencies: `Core`, `CoreUObject`, `Engine` only.
 
 A domain is derived from the engine movement mode on demand. Nothing is stored separately, so it can never disagree with the engine.
 
-| Domain | Engine movement modes |
-|---|---|
-| Ground | `MOVE_Walking`, `MOVE_NavWalking`, `MOVE_Falling` (jumping and falling are part of Ground) |
-| Fly | `MOVE_Flying` |
-| Water | `MOVE_Swimming` |
+| Domain | Engine movement modes | How it is entered |
+|---|---|---|
+| Ground | `MOVE_Walking`, `MOVE_NavWalking`, `MOVE_Falling` (jumping and falling are part of Ground) | Default. Landing, toggling flight off, leaving water. |
+| Fly | `MOVE_Flying` | The Fly input, or pressing Jump while falling (both call `SetWantsToFly(true)`) |
+| Water | `MOVE_Swimming` | **Automatically**, when the character overlaps a `PhysicsVolume` with `bWaterVolume` enabled |
+
+There is no swim input or swim intent. The engine's physics-volume logic switches the character into and out of swimming.
 
 ### 2.1 Domain toggles
 
@@ -45,7 +49,12 @@ Flight is driven by the intent flag `bWantsToFly`, evaluated at the start of eve
 | Does not want to fly, currently flying | Switch to `MOVE_Swimming` if inside a water volume and water is enabled, otherwise to `MOVE_Falling` |
 | Ground domain disabled | Intent is forced on; flight cannot be switched off |
 
-Because the switch happens inside the movement step, the client predicts it and the server performs it on the same move.
+Who sets the intent:
+
+- `IA_Fly` calls `ToggleFlying()`.
+- `ABaseCharacter::Input_JumpStarted` calls `SetWantsToFly(true)` when Jump is pressed while `IsFalling()`, `bDoubleJumpActivatesFlight` is on and the Fly domain is enabled. On the ground the same press is a normal jump.
+
+Because the mode switch happens inside the movement step, the client predicts it and the server performs it on the same move.
 
 ---
 
@@ -66,13 +75,15 @@ The implementation has three pieces:
 - `FNetworkPredictionData_Client_BaseCharacter` allocates that saved move type.
 - `UpdateFromCompressedFlags` on the server reads the bits back.
 
-**All four custom bits are now in use.** Adding another predicted input needs extended network move data (see section 9).
+**All four custom bits are in use.** Adding another predicted input needs extended network move data (see section 10).
+
+The **control mode is not a separate piece of state.** It is computed from the movement mode and `bWantsToSprint`, so client and server always agree on it, and replays reproduce it.
 
 ### 3.1 One-shot actions
 
 Dash and Dodge are requested by setting a flag. The next movement step executes the action and clears the flag, on both the client and the server. Replays after a correction run the same code with the saved flag, so the result is reproduced.
 
-The velocity change itself is stateless: it sets the velocity to `direction * Speed` once. Friction and braking then decay it. There are no timers inside the movement component, which is what keeps replays deterministic.
+The velocity change is stateless: it sets the velocity to `direction * Speed` once. Friction and braking then decay it. There are no timers inside the movement component, which keeps replays deterministic.
 
 ### 3.2 Cooldowns
 
@@ -82,8 +93,6 @@ The velocity change itself is stateless: it sets the velocity to `direction * Sp
 | Server, remote players | When executing, the server accepts the action only if `now + ServerCooldownTolerance >= next allowed time`. A rejection is corrected by the engine. |
 | Listen-server host | Same as an owning client. |
 | Replays | Cooldowns are not evaluated and the event is not fired again. |
-
-`ServerCooldownTolerance` (default 0.15 s) absorbs small clock differences between client and server.
 
 ---
 
@@ -99,49 +108,63 @@ The velocity change itself is stateless: it sets the velocity to `direction * Sp
 
 ---
 
-## 5. Fly
+## 5. Control modes (Fly and Water)
 
-### 5.1 Speeds
+Sprint selects between two ways of controlling the character while flying or swimming.
 
-| Mode | Speed used |
+| | Standard | Camera Steering |
+|---|---|---|
+| Active when | Flying or swimming, Sprint **not** held | Flying or swimming, Sprint **held** |
+| Move direction | Planar, from the camera **yaw only** | Full 3D, from the camera **yaw and pitch** |
+| Up and Down buttons | Ascend / descend straight up and down | Ignored |
+| Speed | `MaxFlySpeed` / `MaxSwimSpeed` | `GlideSpeed` / `FastSwimSpeed` |
+| Body | Upright | Tilts toward the movement vector (configurable) |
+
+Implementation, all in the movement component:
+
+| Function | Purpose |
 |---|---|
-| Flying | `MaxFlySpeed` (default 800) |
-| Gliding | `GlideSpeed` (default 1400) |
+| `IsCameraSteering()` | Flying or swimming and sprinting |
+| `GetControlMode()` | `Standard` or `CameraSteering` (always `Standard` on the ground) |
+| `GetMoveBasisRotation(ControlRotation)` | Yaw-only rotation in Standard mode and on the ground; yaw and pitch in Camera Steering. The character builds the `Move` direction from it. |
+| `AcceptsVerticalButtons()` | True in Fly or Water in Standard mode. The character's Up / Down handlers check it. |
 
-### 5.2 Glide
+The component only **answers** these questions. `ABaseCharacter` calls `AddMovementInput` with the result, which reaches the server as ordinary movement acceleration. AI or other controllers can use the same functions.
 
-Glide is sprint intent while flying (`bEnableGlide` must be on). While gliding, the flight physics step adds:
-
-- a forward push along the body's forward vector (input still steers because it is blended in), and
-- a constant downward acceleration of `GlideSinkAcceleration` (default 250 cm/s^2).
-
-The result is fast forward travel that sinks slowly.
-
-### 5.3 Rotation: `bOrientRotationToFlight`
-
-| Value | Body while flying | Camera relation |
-|---|---|---|
-| `true` | Turns to face the flight vector, including pitch. Levels out (`FlightUprightInterpSpeed`) when there is no input. | Camera is independent (third person) |
-| `false` | Stays upright and turns only in yaw, following the camera | Body yaw follows the camera |
-
-`FlightPitchRollRate` (default 240 deg/s) is copied into `RotationRate.Pitch` and `.Roll` at `BeginPlay` when those are lower. The engine's rotation code needs non-zero pitch and roll rates to tilt the body in flight and to bring it upright again after landing.
-
-### 5.4 Rotation policy on Ground and Water
-
-The movement component owns two flags on the character: "use controller yaw" and "orient to movement". It sets them from one place (`RefreshRotationPolicy`), called on every movement mode change and when `SetFaceControlRotation` is called.
-
-| Domain | Face control rotation = true (first person) | Face control rotation = false (third person) |
-|---|---|---|
-| Ground, Water | Body yaw follows the camera | Body turns toward the movement direction |
-| Fly | `bOrientRotationToFlight` decides (table above); the face flag is not used | |
-
-`ABaseCharacter` calls `SetFaceControlRotation` on both client and server when the perspective changes. Any other code that changes the policy must do the same.
+In Standard mode, pressing a horizontal direction together with Up or Down gives a diagonal at the normal speed, because the engine caps the total speed.
 
 ---
 
-## 6. Water
+## 6. Fly
 
-### 6.1 Surface versus underwater
+### 6.1 Speeds
+
+| Mode | Speed used |
+|---|---|
+| Standard | `MaxFlySpeed` (default 800) |
+| Camera Steering | `GlideSpeed` (default 1400) when `bEnableGlide` is on, otherwise `MaxFlySpeed` |
+
+`IsGliding()` is "flying, sprinting and `bEnableGlide`". `GlideSinkAcceleration` (default 0) adds an optional downward acceleration while gliding. Leave it at 0 for pure camera steering.
+
+### 6.2 Rotation
+
+| Mode | Body while flying |
+|---|---|
+| Standard | Always upright. First person: yaw follows the camera. Third person: yaw turns toward the planar movement direction. Pitch and roll level out at `FlightUprightInterpSpeed`. |
+| Camera Steering, `bOrientRotationToFlight` on | Turns to face the flight vector, pitch included. Levels out (`FlightUprightInterpSpeed`) when there is no input. |
+| Camera Steering, `bOrientRotationToFlight` off | Upright, yaw follows the camera. |
+
+`FlightPitchRollRate` (default 240 deg/s) is copied into `RotationRate.Pitch` and `.Roll` at `BeginPlay` when those are lower. The engine's rotation code needs non-zero pitch and roll rates to tilt the body and to bring it upright again after landing.
+
+---
+
+## 7. Water
+
+### 7.1 Automatic swimming
+
+The engine enters swimming when the character overlaps a `PhysicsVolume` with `bWaterVolume` enabled and leaves it when the character exits. The framework adds nothing on top except the domain toggle (`bCanSwim`). There is no input to start, stop or dive.
+
+### 7.2 Surface versus underwater
 
 `GetWaterZone()` measures how deep the character is using the engine's immersion depth (0 = out of the water, 1 = fully submerged):
 
@@ -151,11 +174,18 @@ The movement component owns two flags on the character: "use controller yaw" and
 | `Underwater` | swimming and immersion at or above the threshold |
 | `None` | not swimming |
 
-Immersion is measured against the water volume's brush, so the **top face of the Physics Volume is the water surface**.
+Immersion is measured against the water volume's brush, so the **top face of the Physics Volume is the water surface**. `GetWaterZone()` performs a trace: call it once per frame and pass the result to `IsResurfacing(Zone)`.
 
-`GetWaterZone()` performs a trace. Call it once per frame and pass the result to `IsResurfacing(Zone)`.
+### 7.3 Control and speeds
 
-### 6.2 Buoyancy
+| Mode | Move | Up / Down | Speed | Body |
+|---|---|---|---|---|
+| Standard | Planar, camera yaw | Ascend / descend | `MaxSwimSpeed` (300) | Upright, turns toward the planar direction (third person) or follows the camera yaw (first person) |
+| Camera Steering | Full 3D, camera | Ignored | `FastSwimSpeed` (600) | Tilts toward the swim vector if `bOrientRotationToSwim`, otherwise upright and follows the camera yaw |
+
+`SwimUprightInterpSpeed` (default 4) controls how fast the body levels out.
+
+### 7.4 Buoyancy and diving
 
 Swimming physics runs with a buoyancy value chosen each step:
 
@@ -165,24 +195,34 @@ Swimming physics runs with a buoyancy value chosen each step:
 | Not diving and `bAutoResurface` is on | `SurfaceBuoyancy` (1.15) |
 | Not diving and `bAutoResurface` is off | `NeutralBuoyancy` (the character hovers where it stops) |
 
-Diving is inferred from acceleration, which is identical on client and server, so no extra flag is needed. Looking down while swimming forward, holding Swim, or holding Crouch all count as diving.
+Diving is inferred from acceleration, which is identical on client and server, so no extra flag is needed. In Standard mode it comes from the Down button. In Camera Steering it comes from looking down while moving.
 
-`SurfaceBuoyancy` and `UnderwaterImmersionThreshold` are starting values chosen from the engine's buoyancy behavior and not measured in your project. Tune them in a real water volume (see the Movement setup document).
+`SurfaceBuoyancy` and `UnderwaterImmersionThreshold` are starting values chosen from the engine's buoyancy behavior and not measured in your project. Tune them in a real water volume.
 
-### 6.3 Resurfacing
+### 7.5 Resurfacing
 
 `IsResurfacing(Zone)` is true when the zone is Underwater, upward speed is above `ResurfaceVerticalSpeed` (40 cm/s), and there is no downward input. `ABaseCharacter` uses it for the `Water.Resurfacing` state.
 
-### 6.4 Speeds
+---
 
-| Condition | Speed |
-|---|---|
-| Swimming | `MaxSwimSpeed` (default 300) |
-| Swimming and sprinting | `FastSwimSpeed` (default 600) |
+## 8. Rotation policy in one place
+
+`RefreshRotationPolicy()` sets two engine flags (`bOrientRotationToMovement` and the character's `bUseControllerRotationYaw`). It runs at the start of every movement step, on mode changes and from `SetFaceControlRotation`.
+
+| Domain and mode | `bOrientRotationToMovement` | `bUseControllerRotationYaw` |
+|---|---|---|
+| Ground | `!bFaceControlRotation` | `bFaceControlRotation` |
+| Fly / Water, Standard | false | `bFaceControlRotation` |
+| Fly / Water, Camera Steering, orient on | true | false |
+| Fly / Water, Camera Steering, orient off | false | true |
+
+`PhysicsRotation` adds what the engine does not do: in Fly and Water it levels pitch and roll, and in Standard mode in third person it turns the yaw toward the planar movement direction. While the engine is tilting the body in Camera Steering with input, it leaves the rotation alone.
+
+`bFaceControlRotation` is set by `SetFaceControlRotation`, which `ABaseCharacter` calls on both the client and the server when the perspective changes.
 
 ---
 
-## 7. Burst actions (Dash and Dodge)
+## 9. Burst actions (Dash and Dodge)
 
 Each action has its own settings (`FMovementActionSettings`): `bEnabled`, `Speed`, `Cooldown`, `StateDuration`.
 
@@ -196,8 +236,6 @@ Each action has its own settings (`FMovementActionSettings`): `bEnabled`, `Speed
 
 Water has no dodge, and the water dash only works while the zone is Underwater.
 
-Direction rules:
-
 | Action | Domain | With input | Without input |
 |---|---|---|---|
 | Dash | Ground | Input direction, flattened | Body forward, flattened |
@@ -205,17 +243,19 @@ Direction rules:
 | Dodge | Ground | Input direction, flattened | Backward |
 | Dodge | Fly | Input direction, full 3D | Body right |
 
-On the ground only the horizontal velocity is replaced. In flight and water the whole velocity is replaced.
+The input direction follows the current control mode, so a dash in Standard mode goes where the planar input points and a dash in Camera Steering goes where the camera points. On the ground only the horizontal velocity is replaced. In flight and water the whole velocity is replaced.
 
 `StateDuration` is not used by the movement component. It travels with the `OnActionStarted` event so the animation layer knows how long to show the action.
 
 ---
 
-## 8. Facts and events
+## 10. Facts, events, extending
 
 | Member | Type | Use |
 |---|---|---|
 | `GetMovementDomain()` | function | Ground, Fly or Water |
+| `GetControlMode()`, `IsCameraSteering()` | functions | Standard or Camera Steering |
+| `GetMoveBasisRotation(Rot)`, `AcceptsVerticalButtons()` | functions | Input routing |
 | `GetWaterZone()` | function | None, Surface, Underwater (performs a trace) |
 | `IsResurfacing(Zone)` | function | Rising underwater without dive input |
 | `GetImmersionDepth()` | function | 0..1 |
@@ -223,10 +263,6 @@ On the ground only the horizontal velocity is replaced. In flight and water the 
 | `OnActionStarted(Action, Domain, StateDuration)` | C++ multicast delegate | Fired once per executed Dash or Dodge, on the owning client and on the server, never during replays |
 
 `OnActionStarted` is a native delegate, so C++ code binds it (ABaseCharacter does). Blueprints listen through the State Machine component's events instead.
-
----
-
-## 9. Extending and limits
 
 | Goal | Notes |
 |---|---|
@@ -236,9 +272,14 @@ On the ground only the horizontal velocity is replaced. In flight and water the 
 | New domain (for example Climb) | Add a value to `EMovementDomain`, a custom movement mode, a case in `GetMovementDomain`, and matching tags in the State Machine framework. |
 | Slide, Mantle | Not implemented here; they are gameplay-triggered actions on the character (`RequestAction`). |
 
-Assumptions:
+---
+
+## 11. Assumptions and limits
 
 - All tuning values must match between client and server. Change Blueprint defaults, not runtime values on one side.
 - Dash and Dodge are velocity impulses. There is no distance-exact dash or root-motion dash.
-- Fly is a toggled mode, not a physics-based lift model.
+- There is no automatic landing while flying. The Fly input toggles flight off, then the character falls.
+- Double-jump takeoff treats **any** falling state as airborne, including a fall off a ledge.
+- Standard mode swims or flies in the horizontal plane only; it cannot steer with the camera by design.
+- The `SurfaceBuoyancy` and immersion defaults are untested starting values.
 - Nothing here was compiled or run in the editor. Use the checklist in `Movement_Blueprint_Setup.md` after the first build.

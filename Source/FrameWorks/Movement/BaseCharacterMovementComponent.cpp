@@ -155,9 +155,12 @@ void UBaseCharacterMovementComponent::BeginPlay()
 		return;
 	}
 
+	// Water is entered automatically by the engine when the character overlaps a PhysicsVolume with bWaterVolume.
+	// Clearing bCanSwim is what disables that for games without a Water domain.
 	GetNavAgentPropertiesRef().bCanSwim = bEnableWaterDomain;
 
-	// Pitch and roll need a non-zero rate, otherwise the body can neither tilt in flight nor level out on landing.
+	// Pitch and roll need a non-zero rate, otherwise the engine can neither tilt the body in Camera Steering
+	// nor bring it upright again after landing.
 	RotationRate.Pitch = FMath::Max(RotationRate.Pitch, FlightPitchRollRate);
 	RotationRate.Roll = FMath::Max(RotationRate.Roll, FlightPitchRollRate);
 
@@ -269,6 +272,38 @@ void UBaseCharacterMovementComponent::SetFaceControlRotation(bool bFace)
 }
 
 // ----------------------------------------------------------------------
+// Input routing helpers
+// ----------------------------------------------------------------------
+
+bool UBaseCharacterMovementComponent::IsCameraSteering() const
+{
+	// Sprint switches Fly and Water from Standard to Camera Steering. On the ground it changes speed only.
+	return (MovementMode == MOVE_Flying || MovementMode == MOVE_Swimming) && IsSprinting();
+}
+
+EDomainControlMode UBaseCharacterMovementComponent::GetControlMode() const
+{
+	return IsCameraSteering() ? EDomainControlMode::CameraSteering : EDomainControlMode::Standard;
+}
+
+FRotator UBaseCharacterMovementComponent::GetMoveBasisRotation(const FRotator& ControlRotation) const
+{
+	if (IsCameraSteering())
+	{
+		// Full camera orientation: looking up and pressing forward climbs, looking down dives.
+		return FRotator(ControlRotation.Pitch, ControlRotation.Yaw, 0.0f);
+	}
+
+	// Ground and Standard mode: camera pitch never affects the movement direction.
+	return FRotator(0.0f, ControlRotation.Yaw, 0.0f);
+}
+
+bool UBaseCharacterMovementComponent::AcceptsVerticalButtons() const
+{
+	return (MovementMode == MOVE_Flying || MovementMode == MOVE_Swimming) && !IsCameraSteering();
+}
+
+// ----------------------------------------------------------------------
 // Facts
 // ----------------------------------------------------------------------
 
@@ -312,7 +347,7 @@ bool UBaseCharacterMovementComponent::IsSprinting() const
 
 bool UBaseCharacterMovementComponent::IsGliding() const
 {
-	return bEnableGlide && MovementMode == MOVE_Flying && bWantsToSprint;
+	return bEnableGlide && MovementMode == MOVE_Flying && IsSprinting();
 }
 
 // ----------------------------------------------------------------------
@@ -353,6 +388,10 @@ float UBaseCharacterMovementComponent::GetMaxSpeed() const
 void UBaseCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float DeltaSeconds)
 {
 	UpdateFlightMode();
+
+	// The control mode depends on Sprint, which can change on any move. Re-evaluating the rotation policy here
+	// keeps client, server and replays identical.
+	RefreshRotationPolicy();
 
 	// One-shot actions travel as flags; clear them once consumed so replays behave the same.
 	if (bWantsToDash)
@@ -414,30 +453,30 @@ void UBaseCharacterMovementComponent::RefreshRotationPolicy()
 		return;
 	}
 
-	if (MovementMode == MOVE_Flying)
+	const EMovementDomain Domain = GetMovementDomain();
+
+	if (Domain == EMovementDomain::Ground)
 	{
-		if (bOrientRotationToFlight)
-		{
-			// Face the flight vector. Pitch is allowed because the engine only forces vertical on ground and in the air.
-			bOrientRotationToMovement = true;
-			CharacterOwner->bUseControllerRotationYaw = false;
-		}
-		else
-		{
-			// Stay upright and turn with the camera.
-			bOrientRotationToMovement = false;
-			CharacterOwner->bUseControllerRotationYaw = true;
-		}
+		// One rule on the ground: follow the camera yaw (first person) or turn toward the movement direction.
+		bOrientRotationToMovement = !bFaceControlRotation;
+		CharacterOwner->bUseControllerRotationYaw = bFaceControlRotation;
+		return;
 	}
-	else if (bFaceControlRotation)
+
+	if (IsCameraSteering())
 	{
-		bOrientRotationToMovement = false;
-		CharacterOwner->bUseControllerRotationYaw = true;
+		// Camera Steering: the body may tilt toward the movement vector (the engine does the turning),
+		// or stay upright and follow the camera yaw.
+		const bool bOrientToVector = (Domain == EMovementDomain::Fly) ? bOrientRotationToFlight : bOrientRotationToSwim;
+		bOrientRotationToMovement = bOrientToVector;
+		CharacterOwner->bUseControllerRotationYaw = !bOrientToVector;
 	}
 	else
 	{
-		bOrientRotationToMovement = true;
-		CharacterOwner->bUseControllerRotationYaw = false;
+		// Standard mode: the body always stays upright. In first person the controller supplies the yaw;
+		// in third person PhysicsRotation turns the body toward the planar movement direction.
+		bOrientRotationToMovement = false;
+		CharacterOwner->bUseControllerRotationYaw = bFaceControlRotation;
 	}
 }
 
@@ -445,17 +484,44 @@ void UBaseCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 {
 	Super::PhysicsRotation(DeltaTime);
 
-	// Level out when flying without input. The engine leaves the rotation untouched in that case.
-	if (MovementMode == MOVE_Flying && bOrientRotationToFlight && Acceleration.IsNearlyZero() && UpdatedComponent)
+	const EMovementDomain Domain = GetMovementDomain();
+	if (Domain == EMovementDomain::Ground || !UpdatedComponent)
 	{
-		const FRotator Current = UpdatedComponent->GetComponentRotation();
-		const FRotator Upright(0.0f, Current.Yaw, 0.0f);
+		// On the ground and in the air the engine already keeps the body vertical.
+		return;
+	}
 
-		if (!Current.Equals(Upright, 0.1f))
+	const bool bSteering = IsCameraSteering();
+	const bool bOrientToVector = bSteering && ((Domain == EMovementDomain::Fly) ? bOrientRotationToFlight : bOrientRotationToSwim);
+
+	// While the engine tilts the body toward the movement vector there is nothing to correct.
+	if (bOrientToVector && !Acceleration.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FRotator Current = UpdatedComponent->GetComponentRotation();
+	FRotator Target = Current;
+
+	// Standard mode in third person: turn toward the planar movement direction and stay upright.
+	if (!bSteering && !bFaceControlRotation)
+	{
+		const FVector PlanarAcceleration(Acceleration.X, Acceleration.Y, 0.0f);
+		if (!PlanarAcceleration.IsNearlyZero())
 		{
-			const FRotator Target = FMath::RInterpTo(Current, Upright, DeltaTime, FlightUprightInterpSpeed);
-			MoveUpdatedComponent(FVector::ZeroVector, Target, /*bSweep=*/false);
+			const float MaxYawStep = (RotationRate.Yaw >= 0.0f) ? RotationRate.Yaw * DeltaTime : 360.0f;
+			Target.Yaw = FMath::FixedTurn(Current.Yaw, PlanarAcceleration.Rotation().Yaw, MaxYawStep);
 		}
+	}
+
+	// Level out pitch and roll.
+	const float LevelSpeed = (Domain == EMovementDomain::Fly) ? FlightUprightInterpSpeed : SwimUprightInterpSpeed;
+	Target.Pitch = FMath::FInterpTo(Current.Pitch, 0.0f, DeltaTime, LevelSpeed);
+	Target.Roll = FMath::FInterpTo(Current.Roll, 0.0f, DeltaTime, LevelSpeed);
+
+	if (!Target.Equals(Current, 0.01f))
+	{
+		MoveUpdatedComponent(FVector::ZeroVector, Target, /*bSweep=*/false);
 	}
 }
 
@@ -465,12 +531,10 @@ void UBaseCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 
 void UBaseCharacterMovementComponent::PhysFlying(float deltaTime, int32 Iterations)
 {
-	if (IsGliding() && UpdatedComponent)
+	// Optional sink while gliding. Camera Steering itself needs no help here: the input acceleration already
+	// points along the camera because ABaseCharacter builds it from GetMoveBasisRotation.
+	if (GlideSinkAcceleration > 0.0f && IsGliding())
 	{
-		// Keep pushing forward and sink slowly. Input still steers because it is blended into the acceleration.
-		const float MaxAccel = GetMaxAcceleration();
-		const FVector Forward = UpdatedComponent->GetForwardVector();
-		Acceleration = (Acceleration + Forward * MaxAccel).GetClampedToMaxSize(MaxAccel);
 		Acceleration.Z -= GlideSinkAcceleration;
 	}
 
@@ -480,6 +544,7 @@ void UBaseCharacterMovementComponent::PhysFlying(float deltaTime, int32 Iteratio
 void UBaseCharacterMovementComponent::PhysSwimming(float deltaTime, int32 Iterations)
 {
 	// Diving is inferred from the downward input acceleration, which is identical on client and server.
+	// It comes from the Down button in Standard mode, or from looking down while moving in Camera Steering.
 	const bool bDiving = Acceleration.Z < -DiveAccelerationThreshold;
 	Buoyancy = (bAutoResurface && !bDiving) ? SurfaceBuoyancy : NeutralBuoyancy;
 

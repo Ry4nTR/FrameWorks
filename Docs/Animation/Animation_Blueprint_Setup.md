@@ -230,9 +230,9 @@ Play in the editor. In the Animation Blueprint select your character in the **De
 | Crouch | `Crouch` |
 | Jump | `Jump` (JumpStart, then JumpLoop), landing plays JumpEnd |
 | Dash / Roll | `Dash` / `Roll` state, then back |
-| Press Fly | `Domain = Fly`, `FlyState = Idle`; move: `Move`; Sprint: `Glide` |
+| Press Fly (or press Jump again while airborne) | `Domain = Fly`, `FlyState = Idle`; move without Sprint: `Move`; move while holding Sprint: `Glide` (stand still and it returns to `Idle`) |
 | Dash / Dodge while flying | `Dash` / `Dodge` |
-| Enter the water pool | `Domain = Water`, `SurfaceIdle` |
+| Enter the water pool (no key needed) | `Domain = Water`, `SurfaceIdle`; move while holding Sprint: `SurfaceFastSwim` |
 | Dive | `TransitionToUnderwater` for about 0.6 s, then `Underwater*` |
 | Rise back up | `Resurfacing`, then `TransitionToSurface`, then `Surface*` |
 | Animation Blueprint editor preview | Ground / Idle, no errors (no pawn exists there) |

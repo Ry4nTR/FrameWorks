@@ -3,16 +3,25 @@
 //
 // DOMAINS (derived from the engine movement mode, never stored separately)
 //   Ground  MOVE_Walking, MOVE_NavWalking, MOVE_Falling
-//   Fly     MOVE_Flying
-//   Water   MOVE_Swimming
+//   Fly     MOVE_Flying    entered with the Fly toggle, or by pressing Jump while airborne
+//   Water   MOVE_Swimming  entered and left automatically through a PhysicsVolume with bWaterVolume enabled
+//
+// CONTROL MODES (Fly and Water only; Sprint is the switch)
+//   Standard         Move is planar and follows the camera YAW only. Camera pitch never steers.
+//                    Vertical movement comes from dedicated Up / Down buttons. The body stays upright.
+//   Camera Steering  Sprint held. Move follows the full camera orientation including pitch (look up + forward = climb).
+//                    The Up / Down buttons are ignored. The body may tilt toward the movement vector.
+//   On the ground there is a single mode: planar movement along the camera yaw.
 //
 // PREDICTION
 //   Sprint, Fly, Dash and Dodge travel in the four custom compressed flags of the saved move, so client and
-//   server execute them on the same move and replay them correctly after a correction.
+//   server execute them on the same move and replay them correctly after a correction. The control mode is a
+//   pure function of that state, so client and server always agree on it.
 //
 // INDEPENDENCE
 //   This component knows nothing about the StateMachine or Animation frameworks. It exposes facts
-//   (GetMovementDomain, GetWaterZone, IsSprinting ...) and the OnActionStarted event; ABaseCharacter wires it up.
+//   (GetMovementDomain, GetControlMode, GetWaterZone ...), input helpers (GetMoveBasisRotation,
+//   AcceptsVerticalButtons) and the OnActionStarted event. ABaseCharacter connects them to the rest.
 //
 // PORTING: copy this folder, keep FRAMEWORKS_API (or rename it to your module macro).
 
@@ -28,6 +37,16 @@ enum class EMovementDomain : uint8
 	Ground	UMETA(DisplayName = "Ground"),
 	Fly		UMETA(DisplayName = "Fly"),
 	Water	UMETA(DisplayName = "Water")
+};
+
+/** How Move and vertical input are interpreted. Only meaningful in the Fly and Water domains. */
+UENUM(BlueprintType)
+enum class EDomainControlMode : uint8
+{
+	/** Planar movement along the camera yaw, dedicated Up / Down buttons. */
+	Standard		UMETA(DisplayName = "Standard"),
+	/** Sprint held: full 3D movement along the camera, vertical buttons ignored. */
+	CameraSteering	UMETA(DisplayName = "Camera Steering")
 };
 
 UENUM(BlueprintType)
@@ -98,7 +117,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Domains")
 	bool bEnableGroundDomain = true;
 
-	/** Untick for games without flight. Fly requests are ignored. */
+	/** Untick for games without flight. Fly toggles and double-jump takeoff are ignored. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Movement|Domains")
 	bool bEnableFlyDomain = true;
 
@@ -119,8 +138,10 @@ public:
 	// ------------------------------------------------------------------
 
 	/**
-	 * True: the body turns to face the flight vector (pitch included) and levels out when idle.
-	 * False: the body stays upright and only turns with the camera yaw.
+	 * Camera Steering only (Sprint held).
+	 * True: the body turns to face the flight vector, pitch included, and levels out when there is no input.
+	 * False: the body stays upright and turns with the camera yaw.
+	 * Standard mode always keeps the body upright.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Fly")
 	bool bOrientRotationToFlight = true;
@@ -129,20 +150,20 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Fly", meta = (ClampMin = "0.0"))
 	float FlightPitchRollRate = 240.0f;
 
-	/** How fast (interp speed) the body levels out when flying without input. Only used with bOrientRotationToFlight. */
+	/** Interp speed at which the body levels out in flight (Standard mode, or Camera Steering without input). 0 = instant. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Fly", meta = (ClampMin = "0.0"))
 	float FlightUprightInterpSpeed = 4.0f;
 
-	/** Hold Sprint while flying to glide: fast forward flight with a slow sink. */
+	/** Sprint while flying uses GlideSpeed (and the Glide animation state) instead of MaxFlySpeed. Camera Steering works either way. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Fly")
 	bool bEnableGlide = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Fly", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float GlideSpeed = 1400.0f;
 
-	/** Downward acceleration (cm/s^2) added while gliding. */
+	/** Optional downward acceleration (cm/s^2) while gliding. 0 = pure camera steering. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Fly", meta = (ClampMin = "0.0"))
-	float GlideSinkAcceleration = 250.0f;
+	float GlideSinkAcceleration = 0.0f;
 
 	// ------------------------------------------------------------------
 	// Water
@@ -151,6 +172,18 @@ public:
 	/** Speed (cm/s) while sprinting in water. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Water", meta = (ClampMin = "0.0", Units = "cm/s"))
 	float FastSwimSpeed = 600.0f;
+
+	/**
+	 * Camera Steering only (Sprint held).
+	 * True: the body turns to face the swim vector, pitch included. False: upright, yaw follows the camera.
+	 * Standard mode always keeps the body upright.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Water")
+	bool bOrientRotationToSwim = true;
+
+	/** Interp speed at which the body levels out while swimming. 0 = instant. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Water", meta = (ClampMin = "0.0"))
+	float SwimUprightInterpSpeed = 4.0f;
 
 	/** Immersion (0..1) at or above which the character counts as underwater instead of at the surface. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Water", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -223,10 +256,32 @@ public:
 
 	/**
 	 * True: the body follows the camera yaw (first-person style). False: it turns toward the movement direction.
-	 * Applies to Ground and Water. Fly uses bOrientRotationToFlight. Call on the server as well as the client.
+	 * Applies to Ground, and to Fly / Water in Standard mode. Call on the server as well as the client.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Movement")
 	void SetFaceControlRotation(bool bFace);
+
+	// ------------------------------------------------------------------
+	// Input routing helpers (used by ABaseCharacter, usable by AI and other input sources)
+	// ------------------------------------------------------------------
+
+	/** Standard or Camera Steering. Always Standard on the ground. */
+	UFUNCTION(BlueprintPure, Category = "Movement|Input")
+	EDomainControlMode GetControlMode() const;
+
+	UFUNCTION(BlueprintPure, Category = "Movement|Input")
+	bool IsCameraSteering() const;
+
+	/**
+	 * Rotation whose forward and right axes turn a Move input into a world direction.
+	 * Yaw only on the ground and in Standard mode. Yaw and pitch in Camera Steering.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Movement|Input")
+	FRotator GetMoveBasisRotation(const FRotator& ControlRotation) const;
+
+	/** True when the Up / Down buttons apply: Fly or Water in Standard mode. False on the ground and in Camera Steering. */
+	UFUNCTION(BlueprintPure, Category = "Movement|Input")
+	bool AcceptsVerticalButtons() const;
 
 	// ------------------------------------------------------------------
 	// Facts
@@ -249,6 +304,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Movement")
 	bool IsSprinting() const;
 
+	/** Flying with Sprint held and glide enabled. */
 	UFUNCTION(BlueprintPure, Category = "Movement|Fly")
 	bool IsGliding() const;
 

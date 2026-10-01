@@ -3,12 +3,22 @@
 //
 // COMPOSITION ROOT
 //   ABaseCharacter is the only class that knows all frameworks:
-//     UBaseCharacterMovementComponent  movement facts and predicted actions
+//     UBaseCharacterMovementComponent  movement facts, control modes and predicted actions
 //     UStateMachineComponent           Gameplay Tag state store (this class is its driver)
 //     UInputConfigData                 input actions
 //   Data flow each frame:  Movement -> ABaseCharacter::UpdateStateMachine -> StateMachine -> AnimationInstance.
 //   Remove the state machine or use another movement component and the character still runs; only the parts that
 //   depend on the missing piece are skipped.
+//
+// INPUT ROUTING (the movement component decides, this class only forwards)
+//   Move     Ground: planar along camera yaw.  Fly / Water, Standard: planar along camera yaw.
+//            Fly / Water, Sprint held (Camera Steering): full 3D along the camera, pitch included.
+//   Jump     Ground: jump.  Airborne (falling): take off into flight.  Fly / Water, Standard: ascend while held.
+//   Crouch   Ground: crouch.  Fly / Water, Standard: descend while held.
+//   Sprint   Ground: run.  Fly / Water: hold to switch to Camera Steering (and glide / fast swim speed).
+//            Jump and Crouch are ignored as vertical buttons while Sprint is held in Fly or Water.
+//   Fly      Toggles flight.
+//   Swimming has no input: it starts and ends with the PhysicsVolume (bWaterVolume).
 //
 // COMPONENT RIG (all created in the constructor)
 //   GetMesh()          Third-person mesh. Replicated to everyone. Hidden from the local player in first person.
@@ -93,6 +103,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Input")
 	TObjectPtr<UInputConfigData> InputConfig;
 
+	/**
+	 * Pressing Jump while airborne (falling) starts flight. Ignored when the Fly domain is disabled,
+	 * in which case the press is a normal jump again (for example for multi-jump games).
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Input")
+	bool bDoubleJumpActivatesFlight = true;
+
 	/** Perspective used when the character spawns. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Camera")
 	ECharacterPerspective DefaultPerspective = ECharacterPerspective::ThirdPerson;
@@ -131,7 +148,7 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Character|Camera")
 	FCharacterPerspectiveChangedSignature OnPerspectiveChanged;
 
-	/** Blueprint hook for the same event. Runs before you touch materials, FOV or HUD. */
+	/** Blueprint hook for the same event. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Character|Camera", meta = (DisplayName = "On Perspective Changed"))
 	void BP_OnPerspectiveChanged(ECharacterPerspective NewPerspective, ECharacterPerspective OldPerspective);
 
@@ -158,14 +175,13 @@ protected:
 	virtual void Input_Look(const FInputActionValue& Value);
 	virtual void Input_JumpStarted(const FInputActionValue& Value);
 	virtual void Input_JumpHeld(const FInputActionValue& Value);
-	virtual void Input_JumpCompleted(const FInputActionValue& Value);
+	virtual void Input_JumpEnded(const FInputActionValue& Value);
 	virtual void Input_CrouchStarted(const FInputActionValue& Value);
 	virtual void Input_CrouchHeld(const FInputActionValue& Value);
-	virtual void Input_CrouchCompleted(const FInputActionValue& Value);
+	virtual void Input_CrouchEnded(const FInputActionValue& Value);
 	virtual void Input_SprintStarted(const FInputActionValue& Value);
-	virtual void Input_SprintCompleted(const FInputActionValue& Value);
+	virtual void Input_SprintEnded(const FInputActionValue& Value);
 	virtual void Input_Fly(const FInputActionValue& Value);
-	virtual void Input_SwimHeld(const FInputActionValue& Value);
 	virtual void Input_Dash(const FInputActionValue& Value);
 	virtual void Input_Dodge(const FInputActionValue& Value);
 	virtual void Input_PerspectiveToggle(const FInputActionValue& Value);
@@ -188,7 +204,9 @@ private:
 	void ApplyPerspective(ECharacterPerspective NewPerspective);
 	void ApplyMovementRotationPolicy();
 	void RefreshPerspectiveVisuals();
-	bool IsInNonGroundDomain() const;
+
+	/** True on the ground (or when there is no framework movement component). */
+	bool IsGroundDomain() const;
 
 	/** Replicated to other players (the owner drives its own value). */
 	UPROPERTY(ReplicatedUsing = OnRep_ActivePerspective)

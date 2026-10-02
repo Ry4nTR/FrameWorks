@@ -26,13 +26,7 @@ public class FrameWorks : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
 		PublicIncludePaths.AddRange(new string[] {
-			"FrameWorks",
-			"FrameWorks/Variant_Horror",
-			"FrameWorks/Variant_Horror/UI",
-			"FrameWorks/Variant_Shooter",
-			"FrameWorks/Variant_Shooter/AI",
-			"FrameWorks/Variant_Shooter/UI",
-			"FrameWorks/Variant_Shooter/Weapons"
+			"FrameWorks"
 		});
 
 		// Uncomment if you are using Slate UI

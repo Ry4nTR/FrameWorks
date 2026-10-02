@@ -1,4 +1,4 @@
-# CoreFramework Submodule & Subtree Guide
+# CoreFramework Submodule & Subtree Guide PROVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 This guide explains how to manage the `CoreFramework` plugin, export it as a clean submodule branch, and integrate/update it across Unreal Engine game projects using **VS Code Terminal (PowerShell)**.
 

@@ -1,9 +1,10 @@
 // BaseCharacter.h
-// Character Framework - Enhanced Input character with first/third person rig and framework wiring.
+// Character Framework - Enhanced Input character with first/third person perspective and framework wiring.
 //
 // COMPOSITION ROOT
 //   ABaseCharacter is the only class that knows all frameworks:
 //     UBaseCharacterMovementComponent  movement facts, control modes and predicted actions
+//     UCameraManagerComponent          camera rig, profiles, blending, FOV, zoom and look input
 //     UStateMachineComponent           Gameplay Tag state store (this class is its driver)
 //     UInputConfigData                 input actions
 //   Data flow each frame:  Movement -> ABaseCharacter::UpdateStateMachine -> StateMachine -> AnimationInstance.
@@ -11,6 +12,7 @@
 //   depend on the missing piece are skipped.
 //
 // INPUT ROUTING (the movement component decides, this class only forwards)
+//   Look     Forwarded to the camera manager.
 //   Move     Ground: planar along camera yaw.  Fly / Water, Standard: planar along camera yaw.
 //            Fly / Water, Sprint held (Camera Steering): full 3D along the camera, pitch included.
 //   Jump     Ground: jump.  Airborne (falling): take off into flight.  Fly / Water, Standard: ascend while held.
@@ -22,11 +24,16 @@
 //
 // COMPONENT RIG (all created in the constructor)
 //   GetMesh()          Third-person mesh. Replicated to everyone. Hidden from the local player in first person.
-//   FirstPersonMesh    First-person arms. Visible to the owning player only, attached to the first-person camera.
-//   FirstPersonCamera  Attached to the third-person mesh at FirstPersonCameraSocketName.
-//   ThirdPersonCamera  On a spring arm attached to the capsule.
+//   FirstPersonMesh    First-person arms. Visible to the owning player only, attached to the managed camera.
+//   CameraManager      Owns the spring arm and the camera. The "FirstPerson" profile attaches the rig to the head
+//                      socket of the third-person mesh, the "ThirdPerson" profile to the capsule.
 //
-// PORTING: copy this folder, keep FRAMEWORKS_API (or rename it to your module macro).
+// PERSPECTIVE
+//   The perspective (first or third person) is character state: it is replicated and it selects the rotation policy
+//   of the movement component. This class maps it to a camera profile name and leaves everything else to the
+//   camera manager. Other camera profiles (aim, cinematic) are driven through GetCameraManager().
+//
+// PORTING: copy this folder, keep COREFRAMEWORK_API (or rename it to your module macro).
 
 #pragma once
 
@@ -36,9 +43,8 @@
 #include "InputActionValue.h"
 #include "BaseCharacter.generated.h"
 
-class UCameraComponent;
 class USkeletalMeshComponent;
-class USpringArmComponent;
+class UCameraManagerComponent;
 class UInputConfigData;
 class UStateMachineComponent;
 class UBaseCharacterMovementComponent;
@@ -87,14 +93,9 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
 	TObjectPtr<USkeletalMeshComponent> FirstPersonMesh;
 
+	/** Owns the camera rig. Tune cameras in its CameraProfiles map. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
-	TObjectPtr<UCameraComponent> FirstPersonCamera;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
-	TObjectPtr<USpringArmComponent> ThirdPersonSpringArm;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
-	TObjectPtr<UCameraComponent> ThirdPersonCamera;
+	TObjectPtr<UCameraManagerComponent> CameraManager;
 
 	// ------------------------------------------------------------------
 	// Configuration
@@ -118,9 +119,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Camera")
 	bool bAllowPerspectiveToggle = true;
 
-	/** Socket on the third-person mesh that carries the first-person camera. */
+	/** Camera profile used in first person. The head socket is set on that profile (AttachSocketName). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Camera")
-	FName FirstPersonCameraSocketName = TEXT("head");
+	FName FirstPersonCameraName = TEXT("FirstPerson");
+
+	/** Camera profile used in third person, and by every machine that does not own the view. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Camera")
+	FName ThirdPersonCameraName = TEXT("ThirdPerson");
 
 	/** Horizontal speed (cm/s) above which the character counts as moving for state selection. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|States", meta = (ClampMin = "0.0", Units = "cm/s"))
@@ -168,6 +173,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Character")
 	UStateMachineComponent* GetStateMachine() const { return StateMachine; }
+
+	/** Entry point for aim, cinematic and any other camera request. */
+	UFUNCTION(BlueprintPure, Category = "Character")
+	UCameraManagerComponent* GetCameraManager() const { return CameraManager; }
 
 protected:
 	// Input handlers. Override to change behavior; each is bound only when its action is set in InputConfig.

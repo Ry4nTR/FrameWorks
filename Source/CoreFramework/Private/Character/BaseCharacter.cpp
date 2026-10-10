@@ -1,9 +1,10 @@
 // BaseCharacter.cpp
-// Character Framework - Enhanced Input character with first/third person rig and framework wiring.
+// Character Framework - Enhanced Input character with first/third person perspective and framework wiring.
 
 #include "Character/BaseCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "CameraSystem/CameraManagerComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
@@ -14,7 +15,6 @@
 #include "StateMachine/StateMachineComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
-#include "GameFramework/SpringArmComponent.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
 
@@ -77,15 +77,32 @@ ABaseCharacter::ABaseCharacter(const FObjectInitializer& ObjectInitializer)
 	// The first-person camera rides on this mesh, so its pose must update even while it is hidden from the owner.
 	BodyMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
 
-	// First-person camera on the head of the third-person mesh.
-	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
-	FirstPersonCamera->SetupAttachment(BodyMesh, FirstPersonCameraSocketName);
-	FirstPersonCamera->bUsePawnControlRotation = true;
-	FirstPersonCamera->bAutoActivate = false;
+	// Camera rig: the manager creates the spring arm and the camera at runtime and owns every profile.
+	CameraManager = CreateDefaultSubobject<UCameraManagerComponent>(TEXT("CameraManager"));
 
-	// First-person arms follow the camera and are only rendered for the owner.
+	// First person: the camera sits on the head socket of the third-person mesh and follows its animation.
+	FCameraProfile FirstPersonProfile;
+	FirstPersonProfile.ArmLength = 0.0f;
+	FirstPersonProfile.TargetOffset = FVector::ZeroVector;
+	FirstPersonProfile.SocketOffset = FVector::ZeroVector;
+	FirstPersonProfile.bAllowZoom = false;
+	FirstPersonProfile.bDoCollisionTest = false;
+	FirstPersonProfile.bFirstPerson = true;
+	FirstPersonProfile.AttachSocketName = TEXT("head");
+	CameraManager->CameraProfiles.Add(FirstPersonCameraName, FirstPersonProfile);
+
+	// Third person: spring arm on the capsule, raised to head height.
+	FCameraProfile ThirdPersonProfile;
+	ThirdPersonProfile.ArmLength = 350.0f;
+	ThirdPersonProfile.TargetOffset = FVector(0.0f, 0.0f, 60.0f);
+	ThirdPersonProfile.SocketOffset = FVector(0.0f, 0.0f, 30.0f);
+	ThirdPersonProfile.bDoCollisionTest = true;
+	CameraManager->CameraProfiles.Add(ThirdPersonCameraName, ThirdPersonProfile);
+	CameraManager->DefaultCameraName = ThirdPersonCameraName;
+
+	// First-person arms follow the managed camera (attached in PostInitializeComponents) and are only rendered for the owner.
 	FirstPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FirstPersonMesh"));
-	FirstPersonMesh->SetupAttachment(FirstPersonCamera);
+	FirstPersonMesh->SetupAttachment(GetRootComponent());
 	FirstPersonMesh->SetOnlyOwnerSee(true);
 	FirstPersonMesh->SetOwnerNoSee(false);
 	FirstPersonMesh->CastShadow = false;
@@ -94,19 +111,6 @@ ABaseCharacter::ABaseCharacter(const FObjectInitializer& ObjectInitializer)
 	FirstPersonMesh->SetCollisionProfileName(TEXT("NoCollision"));
 	FirstPersonMesh->SetGenerateOverlapEvents(false);
 	FirstPersonMesh->SetHiddenInGame(true);
-
-	// Third-person camera on a spring arm.
-	ThirdPersonSpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("ThirdPersonSpringArm"));
-	ThirdPersonSpringArm->SetupAttachment(GetRootComponent());
-	ThirdPersonSpringArm->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
-	ThirdPersonSpringArm->TargetArmLength = 350.0f;
-	ThirdPersonSpringArm->SocketOffset = FVector(0.0f, 0.0f, 30.0f);
-	ThirdPersonSpringArm->bUsePawnControlRotation = true;
-	ThirdPersonSpringArm->bDoCollisionTest = true;
-
-	ThirdPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("ThirdPersonCamera"));
-	ThirdPersonCamera->SetupAttachment(ThirdPersonSpringArm, USpringArmComponent::SocketName);
-	ThirdPersonCamera->bUsePawnControlRotation = false;
 
 	// State machine (replicates its own properties).
 	StateMachine = CreateDefaultSubobject<UStateMachineComponent>(TEXT("StateMachine"));
@@ -129,6 +133,21 @@ void ABaseCharacter::PostInitializeComponents()
 		}
 	}
 
+	if (CameraManager)
+	{
+		// The first-person profile attaches the camera to a socket of this mesh.
+		CameraManager->SetSocketParent(GetMesh());
+
+		// The managed camera exists once the manager is initialized (never on a dedicated server).
+		if (FirstPersonMesh)
+		{
+			if (UCameraComponent* ManagedCamera = CameraManager->GetCameraComponent())
+			{
+				FirstPersonMesh->AttachToComponent(ManagedCamera, FAttachmentTransformRules::KeepRelativeTransform);
+			}
+		}
+	}
+
 	if (GetMesh())
 	{
 		GetMesh()->AddTickPrerequisiteActor(this);
@@ -142,12 +161,6 @@ void ABaseCharacter::PostInitializeComponents()
 void ABaseCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-
-	// The socket name is a tunable property, so attach again with the final value.
-	if (FirstPersonCamera && GetMesh())
-	{
-		FirstPersonCamera->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, FirstPersonCameraSocketName);
-	}
 
 	ActivePerspective = DefaultPerspective;
 	ApplyMovementRotationPolicy();
@@ -303,9 +316,10 @@ void ABaseCharacter::Input_Move(const FInputActionValue& Value)
 
 void ABaseCharacter::Input_Look(const FInputActionValue& Value)
 {
-	const FVector2D Axis = Value.Get<FVector2D>();
-	AddControllerYawInput(Axis.X);
-	AddControllerPitchInput(Axis.Y);
+	if (CameraManager)
+	{
+		CameraManager->AddLookInput(Value.Get<FVector2D>());
+	}
 }
 
 void ABaseCharacter::Input_JumpStarted(const FInputActionValue& Value)
@@ -486,13 +500,10 @@ void ABaseCharacter::RefreshPerspectiveVisuals()
 	// Only the machine that owns the view shows first person. Everyone else keeps the third-person mesh.
 	const bool bFirstPersonView = IsLocallyControlled() && ActivePerspective == ECharacterPerspective::FirstPerson;
 
-	if (FirstPersonCamera)
+	// Switching perspective is a cut, as before. The manager is a no-op on dedicated servers.
+	if (CameraManager)
 	{
-		FirstPersonCamera->SetActive(bFirstPersonView);
-	}
-	if (ThirdPersonCamera)
-	{
-		ThirdPersonCamera->SetActive(!bFirstPersonView);
+		CameraManager->SwitchToCamera(bFirstPersonView ? FirstPersonCameraName : ThirdPersonCameraName, 0.0f);
 	}
 	if (FirstPersonMesh)
 	{

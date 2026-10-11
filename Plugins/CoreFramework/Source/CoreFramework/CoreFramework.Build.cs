@@ -22,17 +22,21 @@ public class CoreFramework : ModuleRules
 			);
 			
 		
-		PublicDependencyModuleNames.AddRange(
-			new string[]
-			{
-				"Core",
-				"CoreUObject",
-				"Engine",
-				"InputCore",
-				"EnhancedInput",
-				"GameplayTags"
-			}
-			);
+		PublicDependencyModuleNames.AddRange(new string[]
+		{
+			"Core",
+			"CoreUObject",
+			"Engine",
+			"InputCore",
+			"EnhancedInput",
+			"GameplayTags",     // Layer / screen / slot IDs[cite: 1]
+			"UMG",              // UUserWidget[cite: 1]
+			"Slate",
+			"SlateCore",
+			"CommonUI",         // UCommonActivatableWidget, stacks, tab list[cite: 1]
+			"CommonInput",      // Input type detection (mouse / keyboard / gamepad)[cite: 1]
+			"DeveloperSettings" // Project Settings integration[cite: 1]
+		});
 			
 		
 		PrivateDependencyModuleNames.AddRange(

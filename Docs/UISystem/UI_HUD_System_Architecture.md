@@ -1,11 +1,13 @@
-# CoreFramework UI & HUD System — Architecture & Technical Specification
+# CoreFramework UI & HUD System — Architecture & Technical Specification (v2)
 
 **Document:** `UI_HUD_System_Architecture.md`
 **Module:** `CoreFramework` (plugin, export macro `COREFRAMEWORK_API`)
 **Engine target:** Unreal Engine 5.5 – 5.8
-**Companion:** `UI_HUD_Setup_Guide.md` (step by step implementation)
+**Companion:** `UI_HUD_Setup_Guide.md` (beginner friendly, step by step)
 
-> **Verification status.** The code was written against the CommonUI / Enhanced Input / GameplayTags APIs of UE 5.5–5.8 and checked by careful review, but it was **not compiled** in the environment that produced it (no engine available there). Appendix A lists every engine API the system touches, with the one-line fix if a signature differs in your exact engine version. Expect at most a handful of trivial compile adjustments on first build.
+> **What v2 changes.** The framework is now strictly **infrastructure**. It ships C++ base classes and exactly **one** Blueprint asset (the root layout with its four layer stacks). It ships no menus, no HUD layout, no styles, no art. Every screen of a game is built **in the game project** from the base parents. The C++ is organised in responsibility folders. Section 10 lists the audit results and every change.
+>
+> **Verification status.** Written against the CommonUI / Enhanced Input / GameplayTags APIs of UE 5.5–5.8 and checked by careful review, but **not compiled** by its author (no engine available there). Appendix A lists every engine API the system touches with the one-line fix if a signature differs in your engine version.
 
 ---
 
@@ -13,127 +15,206 @@
 
 | Requirement | Decision | Why |
 |---|---|---|
-| Genre agnostic | The framework knows **screens, layers, slots, tabs, a local player context**. It never knows health, stamina, inventory or any game stat. | Game data reaches widgets through the project's own components/delegates (Step 4 of the setup guide). |
-| C++ does the heavy lifting | All logic (stacks, async loading, input config, focus, binding, tab building) is C++. Blueprints only supply asset references, layout, styling and animation. | Matches the rest of CoreFramework. |
-| Stack / layer management, back handling, input routing, gamepad focus | **Build on CommonUI** (`UCommonActivatableWidget`, `UCommonActivatableWidgetStack`, `UCommonTabListWidgetBase`, the CommonUI action router). | CommonUI already solves the hard parts (modal input blocking, back action, mouse/keyboard/gamepad switching, per-platform glyphs). Re-implementing them is a large maintenance burden and gets worse on consoles. The framework adds the missing declarative layer on top instead of competing with it. |
-| Async UI loading | Every screen, HUD element and tab content class is a **soft class reference** streamed through `UAssetManager`'s streamable manager. Optional "preload and keep resident". | No hitch when opening a menu; memory only used when needed. |
-| Multiplayer, split screen | One `UUIFrameSubsystem` per **`ULocalPlayer`**; bootstrap from `AHUD` (exists only for local controllers). | No UI objects on dedicated servers, correct per-player roots in split screen. |
-| Extensible without editing framework code | Layers, screens, slots use **gameplay tags**; screens, HUD elements and tabs live in **data assets** and in **runtime registries**. | A game project adds content by creating assets, never by patching the plugin. |
-| Safe possess / unpossess / respawn / late replication | **Observer hub** (`UUIBindingHub`) with a strict Bound/Unbound pairing guarantee, event driven plus a low-rate safety net. | Widgets never poll, never miss a pawn, never leak subscriptions to a dead pawn. |
+| **Clean infrastructure only** | The plugin contains input mode handling, CommonUI routing, layer stacks, async loading, player binding, data assets, base classes. Nothing a player can see except the empty root layout. | The framework must work for any genre; visuals are a game decision. |
+| **Zero pre-baked layouts** | No Main Menu, Pause Menu, Settings or HUD Blueprint exists in the plugin. No screen ids are shipped either (only layer ids and one default HUD slot id). | A shipped menu would be deleted or fought against in every game. |
+| **Reusable parents** | Game widgets use the C++ classes **directly as Blueprint parents**. No empty wrapper Blueprints. | A wrapper adds an extra asset to maintain with no behavior; defaults live in C++ constructors. |
+| Stack / layer management, back handling, input routing, gamepad focus | **Build on CommonUI** (`UCommonActivatableWidget`, `UCommonActivatableWidgetStack`, `UCommonTabListWidgetBase`, the CommonUI action router). | CommonUI solves modal input blocking, back action and device switching. The framework adds a declarative layer on top instead of competing with it. |
+| Async UI loading | Every screen, HUD element and tab page is a **soft class reference** streamed through the asset manager's streamable manager. Optional preload-and-keep-resident. | No hitch when opening a menu. |
+| Multiplayer, split screen | One `UUIFrameSubsystem` per **`ULocalPlayer`**; bootstrap from `AHUD` (only exists for local controllers). | No UI objects on dedicated servers. |
+| Extensible without editing framework code | Layers, screens and slots are **gameplay tags** owned by the game; screens, HUD elements and tabs live in **data assets** and **runtime registries**. | A game adds content by creating assets. |
+| Safe possess / unpossess / respawn / late replication | **Observer hub** (`UUIBindingHub`) with a strict Bound/Unbound pairing guarantee. | Widgets never poll and never leak subscriptions to a dead pawn. |
+| Organised project | C++ split into responsibility folders; game Content split into responsibility folders (Section 9). | Findability. |
 
 ---
 
-## 2. High-level architecture
+## 2. Architecture overview
 
-### 2.1 Components
+### 2.1 The separation rule
 
-| Component | Class | Responsibility |
+```
+┌───────────────────────── CoreFramework plugin ──────────────────────────┐   ┌──────────────────────── Game project ────────────────────────┐
+│ INFRASTRUCTURE ONLY                                                     │   │ ALL CONTENT AND DESIGN                                        │
+│                                                                         │   │                                                               │
+│ C++ base classes (parents)       UBaseUserWidget  UBaseActivatableWidget│   │ WBP_HUD            parent  UBaseHUDWidget                     │
+│                                  UBaseButton      UBaseHUDWidget        │   │ WBP_MainMenu       parent  UBaseMenuWidget                    │
+│                                  UBaseMenuWidget  UBaseTabWidget        │   │ WBP_PauseMenu      parent  UBaseMenuWidget                    │
+│                                  UBaseRootLayoutWidget  ABaseHUD        │   │ WBP_Settings       parent  UBaseMenuWidget                    │
+│ Manager / binding                UUIFrameSubsystem  UUIBindingHub       │   │ WBP_Tab_*          parent  UBaseTabWidget                     │
+│                                  IBaseUIBinderInterface                 │   │ WBP_Button_*       parent  UBaseButton                        │
+│ Data asset CLASSES               UUIConfigDataAsset  UUITabSetDataAsset │   │ WBP_Popup_*        parent  UBaseActivatableWidget             │
+│ Native ids                       CoreFramework.UI.Layer.*  HUDSlot.Default│  │ BP_HUD_*           parent  ABaseHUD                           │
+│                                                                         │   │ DA_UIConfig, DA_Settings_Tabs   (instances of the data assets)│
+│ Content: ONE Blueprint ──► WBP_BaseRootLayout (4 empty layer stacks)    │   │ Gameplay tags, styles, fonts, textures, animations, input data│
+└─────────────────────────────────────────────────────────────────────────┘   └───────────────────────────────────────────────────────────────┘
+        no art, no menus, no layout                  ──── inherits / references ────►        everything the player sees
+```
+
+The dependency only goes one way: the game depends on the plugin; the plugin never references a game asset or class.
+
+### 2.2 Components
+
+| Component | Class | Folder | Responsibility |
+|---|---|---|---|
+| Manager | `UUIFrameSubsystem` (`ULocalPlayerSubsystem`) | `Manager/` | Owns the root layout, pushes/pops screens by tag, async loads, holds the registries, owns the binding hub. |
+| Bootstrap | `ABaseHUD` (`AHUD`) | `HUD/` | Starts/stops the subsystem for its local controller. Draws nothing. |
+| Root | `UBaseRootLayoutWidget` | `Layout/` | One per local player. Holds one `UCommonActivatableWidgetStack` per layer. |
+| Screen base | `UBaseActivatableWidget` | `Foundation/` | Anything pushed on a layer. Declares input mode, focus, side effects. |
+| Plain widget base | `UBaseUserWidget` | `Foundation/` | HUD elements, list entries. Show/Hide hook, binding, input helpers. |
+| Button base | `UBaseButton` | `Foundation/` | Parent of every button: label text support on top of CommonUI buttons. |
+| HUD container | `UBaseHUDWidget` | `HUD/` | Game layer container with named element slots. |
+| Menu | `UBaseMenuWidget` | `Menu/` | Menu screen with an optional data-driven tab bar. |
+| Tab page | `UBaseTabWidget` | `Menu/Tabs/` | Content of one tab; optional Apply / Revert contract. |
+| Binding | `IBaseUIBinderInterface`, `UUIBindingHub` | `Binding/` | Controller / PlayerState / Pawn observer. |
+| Data | `UUIConfigDataAsset`, `UUITabSetDataAsset` | `Data/` | Data asset classes (the game creates the instances). |
+| Settings, ids, types | `UUIFrameSettings`, `FUITags`, `UITypes.h` | `Core/` | Project Settings page, native tags, enums and descriptors. |
+
+### 2.3 Who owns what
+
+| Thing | Owner | Where |
 |---|---|---|
-| Manager | `UUIFrameSubsystem` (`ULocalPlayerSubsystem`) | Owns the root layout, pushes/pops screens by tag, async loads, holds the extension registries, owns the binding hub. |
-| Bootstrap | `ABaseHUD` (`AHUD`) | Starts/stops the subsystem for its local controller. Draws nothing. |
-| Root | `UBaseRootLayoutWidget` | One per local player. Contains one `UCommonActivatableWidgetStack` per layer. |
-| Screens | `UBaseActivatableWidget` and children `UBaseHUDWidget`, `UBaseMenuWidget` | Anything that is pushed on a layer. Declares its own input mode, focus target, side effects. |
-| Plain widgets | `UBaseUserWidget`, `UBaseTabWidget` | HUD elements, tab pages, list entries. Show/Hide hook, binding, input helpers. |
-| Tab bar button | `UBaseTabButton` | Button class instantiated by the menu for each tab. |
-| Binding | `IBaseUIBinderInterface`, `UUIBindingHub` | Controller / PlayerState / Pawn observer for widgets. |
-| Data | `UUIConfigDataAsset`, `UUITabSetDataAsset`, `UUIFrameSettings` | Everything configurable, all soft references. |
-| Ids | `FUITags` (native gameplay tags) | Layers, shipped screens, default HUD slot. Projects add their own tags. |
-
-### 2.2 Who does what (C++, data assets, Blueprints)
-
-| Layer of the project | Contains | Never contains |
-|---|---|---|
-| **C++ in CoreFramework** | Subsystem, widget base classes, hub, registries, tag accessors, data asset classes | Game stats, game specific screens, any `#include` of game code |
-| **Data assets** (`DA_UIConfig`, `DA_*Tabs`) | Which widget class is which screen, which layer, which HUD elements, which tabs | Logic |
-| **Framework Blueprints** (`WBP_Base*`, in the plugin's Content) | Neutral layout and styling of the base screens | Game stats |
-| **Game project Blueprints / C++** | Child widgets, game components and delegates, game tags, game specific data assets | Edits to plugin files |
+| Behavior (stacks, loading, input config, focus, binding, tab building) | Framework | C++ in the plugin |
+| Layer structure (four stacks) | Framework | `WBP_BaseRootLayout` (plugin Content) |
+| Which screen exists, which class, which layer | Game | `DA_UIConfig` |
+| Screen ids, project layers, project slots | Game | Gameplay tags in the game project |
+| Layout, art, fonts, styles, animations, texts | Game | Game Content |
+| Game data shown on the HUD (health, ammo…) | Game | Game C++ components + widgets (Step 5 of the guide) |
 
 ---
 
-## 3. Class diagram and data flow
+## 3. Diagrams and data flow
 
-### 3.1 Inheritance
+### 3.1 Source folder layout (framework)
+
+```
+Plugins/CoreFramework/Source/CoreFramework/UISystem/
+├─ Core/         UITypes.h  UIGameplayTags.h/.cpp  UIFrameSettings.h
+│                  enums, descriptors, log category, native tags, Project Settings page
+├─ Data/         UIConfigDataAsset.h
+│                  UUIConfigDataAsset, UUITabSetDataAsset
+├─ Manager/      UIFrameSubsystem.h/.cpp
+│                  per-local-player manager, registries, async push
+├─ Binding/      BaseUIBinderInterface.h  UIBindingHub.h/.cpp
+│                  observer contract + hub
+├─ Layout/       BaseRootLayoutWidget.h/.cpp
+│                  layer stacks container
+├─ Foundation/   BaseUserWidget.h/.cpp  BaseActivatableWidget.h/.cpp  BaseButton.h/.cpp
+│                  parents of everything the game builds
+├─ HUD/          BaseHUD.h/.cpp  BaseHUDWidget.h/.cpp
+│                  bootstrap actor + HUD container widget
+└─ Menu/         BaseMenuWidget.h/.cpp
+   └─ Tabs/      BaseTabWidget.h/.cpp
+                   menus and their tab pages
+```
+
+Include style: `#include "UISystem/<Folder>/<File>.h"` (works with the flat module layout used by CoreFramework).
+
+### 3.2 Inheritance
 
 ```
 UCommonUserWidget
  ├─ UBaseUserWidget  ········ [IBaseUIBinderInterface]  Show/Hide hook, binding, input helpers
  │   └─ UBaseTabWidget ······ tab page (HasPendingChanges / ApplyChanges / RevertChanges)
- │        └─ WBP_Tab_*  (game / framework Blueprints)
+ │        └─ WBP_Tab_*            (GAME)
  └─ UBaseRootLayoutWidget ·· layer stacks
+      └─ WBP_BaseRootLayout       (PLUGIN Content: the only shipped Blueprint)
 
 UCommonActivatableWidget
  └─ UBaseActivatableWidget · [IBaseUIBinderInterface]  input mode, focus, pause/suppress, anim hook
      ├─ UBaseHUDWidget ····· Game layer container, named element slots
-     │    └─ WBP_BaseHUD → game HUD
-     └─ UBaseMenuWidget ···· Main / Pause / Settings, data driven tab bar
-          └─ WBP_BaseMainMenu, WBP_BaseSettings → game menus
+     │    └─ WBP_HUD              (GAME)
+     ├─ UBaseMenuWidget ···· menu with optional tab bar
+     │    └─ WBP_MainMenu, WBP_PauseMenu, WBP_Settings   (GAME)
+     └─ WBP_Popup_*                                      (GAME, directly on this class)
 
 UCommonButtonBase
- └─ UBaseTabButton ········· tab bar button
+ └─ UBaseButton ············ label text support
+      └─ WBP_Button_*, WBP_Button_Tab                    (GAME)
 
-UPrimaryDataAsset
- ├─ UUIConfigDataAsset ····· root class, screens, HUD elements, tab set bindings
- └─ UUITabSetDataAsset ····· list of FUITabDescriptor
-
-UDeveloperSettings ─ UUIFrameSettings   (Project Settings > CoreFramework > CoreFramework UI)
-AHUD               ─ ABaseHUD           (bootstrap)
+UPrimaryDataAsset ─ UUIConfigDataAsset, UUITabSetDataAsset  ─►  DA_UIConfig, DA_Settings_Tabs   (GAME instances)
+UDeveloperSettings ─ UUIFrameSettings
+AHUD               ─ ABaseHUD ─► BP_HUD_Gameplay, BP_HUD_MainMenu                                (GAME)
 ULocalPlayerSubsystem ─ UUIFrameSubsystem
-UObject            ─ UUIBindingHub      (owned by the subsystem)
+UObject            ─ UUIBindingHub   (owned by the subsystem)
 ```
 
-### 3.2 Ownership and lifetime
+### 3.3 Content ownership (what exists where on disk)
+
+```
+Plugins/CoreFramework/Content/UI/
+└─ Layout/
+   └─ WBP_BaseRootLayout            ← the ONLY Blueprint of the plugin (4 named, empty stacks)
+
+<GameProject>/Content/UI/           ← everything below is the game's
+├─ Config/       DA_UIConfig, DA_Settings_Tabs
+├─ Bootstrap/    BP_HUD_Gameplay, BP_HUD_MainMenu         (parents: ABaseHUD)
+├─ HUD/          WBP_HUD                                  (parent: UBaseHUDWidget)
+│  └─ Elements/  WBP_HealthBar, WBP_ManaBar …             (parent: UBaseUserWidget / game C++ child)
+├─ Menus/
+│  ├─ MainMenu/  WBP_MainMenu                             (parent: UBaseMenuWidget)
+│  ├─ PauseMenu/ WBP_PauseMenu                            (parent: UBaseMenuWidget)
+│  └─ Settings/  WBP_Settings                             (parent: UBaseMenuWidget)
+│     └─ Tabs/   WBP_Tab_Graphics, WBP_Tab_Audio …        (parent: UBaseTabWidget)
+├─ Popups/       WBP_Popup_Confirm …                      (parent: UBaseActivatableWidget)
+├─ Components/
+│  ├─ Buttons/   WBP_Button_Primary, WBP_Button_Tab       (parent: UBaseButton)
+│  │  └─ Styles/ BP_ButtonStyle_*                         (CommonButtonStyle)
+│  └─ Text/      BP_TextStyle_*                           (CommonTextStyle)
+└─ Input/        DT_UI_Actions, BP_CommonInputData
+```
+
+### 3.4 Runtime ownership and lifetime
 
 ```
 ULocalPlayer  (one per split-screen player, lives for the session)
  └─ UUIFrameSubsystem ................................ lifetime = local player
      ├─ UUIBindingHub ................................ Controller → PlayerState / Pawn observer
-     ├─ Registries (not UPROPERTY, plain maps)
-     │    ├─ ScreenRegistry     FGameplayTag → FUIScreenDefinition
-     │    ├─ HUDElementRegistry FName        → FUIHUDElementDescriptor
-     │    └─ MenuTabRegistry    FGameplayTag → [FUITabDescriptor]
+     ├─ Registries (plain maps)
+     │    ├─ ScreenRegistry     FGameplayTag → FUIScreenDefinition      (from DA_UIConfig + RegisterScreen)
+     │    ├─ HUDElementRegistry FName        → FUIHUDElementDescriptor  (from DA_UIConfig + RegisterHUDElement)
+     │    └─ MenuTabRegistry    FGameplayTag → [FUITabDescriptor]       (RegisterMenuTab, runtime only)
      ├─ ResidentHandles ............................... keep "preload" classes in memory
-     └─ UBaseRootLayoutWidget ......................... lifetime = HUD actor of the controller
-         ├─ [Layer.Game]    Stack ─ UBaseHUDWidget ─┬─ DefaultElementSlot ─ HUD element widgets
-         │                                          └─ custom slots (RegisterElementSlot)
-         ├─ [Layer.Menu]    Stack ─ UBaseMenuWidget ─┬─ TabList (UBaseTabButton × N)
-         │                                           └─ TabSwitcher ─ UBaseTabWidget × N
-         ├─ [Layer.Modal]   Stack ─ popups (Is Modal)
+     └─ UBaseRootLayoutWidget (WBP_BaseRootLayout) .... lifetime = HUD actor of the controller
+         ├─ [Layer.Game]    Stack ─ game's HUD screen ─┬─ DefaultElementSlot ─ HUD element widgets
+         │                                             └─ custom slots (RegisterElementSlot)
+         ├─ [Layer.Menu]    Stack ─ game's menus ──────┬─ TabList (UBaseButton × N)
+         │                                             └─ TabSwitcher ─ UBaseTabWidget × N
+         ├─ [Layer.Modal]   Stack ─ game's popups (Is Modal)
          └─ [Layer.Overlay] Stack ─ notifications
 
 APlayerController
- └─ ABaseHUD ............ BeginPlay → InitializeForPlayerController(PC, StartupScreens, this)
+ └─ ABaseHUD child ...... BeginPlay → InitializeForPlayerController(PC, StartupScreens, this)
                          EndPlay   → ReleasePlayerController(PC, this)
 ```
 
-### 3.3 Start-up sequence
+### 3.5 Start-up sequence
 
 ```
-GameMode.HUDClass = BP_*HUD (child of ABaseHUD, StartupScreens = [Screen.HUD])
+GameMode.HUDClass = BP_HUD_Gameplay  (child of ABaseHUD, StartupScreens = [UI.Screen.HUD])
         │
  local PlayerController spawns its HUD
         │
  ABaseHUD::BeginPlay
         │  UUIFrameSubsystem::InitializeForPlayerController
-        │     ├─ EnsureConfigLoaded      DA_UIConfig (tiny, soft refs only) → fills the 3 registries,
+        │     ├─ EnsureConfigLoaded      DA_UIConfig (tiny, soft refs only) → fills Screen + HUD element registries,
         │     │                           preloads screens flagged "Preload And Keep Resident"
         │     ├─ UIBindingHub::Start(PC) → Controller bound, Refresh() → PlayerState / Pawn bound if present
         │     ├─ PushScreenAsync(each StartupScreen)   (queued: root layout does not exist yet)
-        │     └─ BeginRootLoad           RequestAsyncLoad(RootLayoutClass)
+        │     └─ BeginRootLoad           RequestAsyncLoad(DA_UIConfig.RootLayoutClass = WBP_BaseRootLayout)
         ▼
  root class streamed in (async)
         │  CreateWidget<UBaseRootLayoutWidget>(PC) → AddToPlayerScreen(ZOrder)
-        │  RootLayout::NativeOnInitialized registers Game / Menu / Modal / Overlay stacks
+        │  NativeOnInitialized registers Game / Menu / Modal / Overlay stacks
         │  FlushDeferredPushes → PushScreenAsync for each queued screen, in order
         ▼
- UBaseHUDWidget on the Game layer → activated → input config "Game" applied by CommonUI
+ the game's HUD widget on the Game layer → activated → CommonUI applies its input config ("Game")
         │  NativeConstruct: registers as binder (receives current Controller/PlayerState/Pawn),
         │                   registers DefaultElementSlot, spawns registered HUD elements (async)
 ```
 
-### 3.4 Pushing a screen (async data flow)
+### 3.6 Pushing a screen (async data flow)
 
 ```
-Blueprint / C++:  UIFrameSubsystem->PushScreen(Screen.Settings)
+Blueprint / C++:  UIFrameSubsystem->PushScreen(UI.Screen.Settings)        (a tag the GAME created)
         │
         ▼
  ScreenRegistry lookup ──(missing)──► warning + callback(null)
@@ -160,7 +241,7 @@ Blueprint / C++:  UIFrameSubsystem->PushScreen(Screen.Settings)
               OnScreenPushed(Tag, Widget)  → all queued callbacks
 ```
 
-### 3.5 Binding flow (possess, respawn, late replication)
+### 3.7 Binding flow (possess, respawn, late replication)
 
 ```
  UIBindingHub (per local player)
@@ -184,12 +265,12 @@ Blueprint / C++:  UIFrameSubsystem->PushScreen(Screen.Settings)
 
 ## 4. Core C++ declarations
 
-All headers below are the **actual source files** of the package (`Source/CoreFramework/Public/UISystem/`).
+All headers below are the **actual source files** of the package.
 
-### 4.1 `UITypes.h` — enums, screen / tab / HUD element descriptors
+### 4.1 `Core/UITypes.h` — enums, screen / tab / HUD element descriptors
 
 ```cpp
-// CoreFramework UI System
+// CoreFramework UI System - Core
 #pragma once
 
 #include "CoreMinimal.h"
@@ -201,6 +282,9 @@ COREFRAMEWORK_API DECLARE_LOG_CATEGORY_EXTERN(LogCoreUI, Log, All);
 class UBaseActivatableWidget;
 class UBaseTabWidget;
 class UBaseUserWidget;
+
+/** Delegate used by the input action binding helpers of UBaseUserWidget and UBaseActivatableWidget. */
+DECLARE_DYNAMIC_DELEGATE(FBaseUIActionDelegate);
 
 /**
  * How an activatable screen wants input routed while it is the topmost active screen.
@@ -225,22 +309,23 @@ enum class EUIInputMode : uint8
 /**
  * Registry entry describing one screen (menu, HUD, popup...) that the UI subsystem can push by tag.
  * Lives in UUIConfigDataAsset or is registered at runtime through UUIFrameSubsystem::RegisterScreen.
+ * The framework ships no screens: every entry belongs to the game project.
  */
 USTRUCT(BlueprintType)
 struct COREFRAMEWORK_API FUIScreenDefinition
 {
 	GENERATED_BODY()
 
-	/** Unique id used with PushScreen / PopScreen. Add your own tags in Project Settings > Gameplay Tags. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen", meta = (Categories = "CoreFramework.UI.Screen"))
+	/** Unique id used with PushScreen / PopScreen. Create your own tags (for example UI.Screen.MainMenu) in Project Settings > Gameplay Tags. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen")
 	FGameplayTag ScreenTag;
 
 	/** Soft reference: nothing is loaded until the screen is requested (or preloaded). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen")
 	TSoftClassPtr<UBaseActivatableWidget> WidgetClass;
 
-	/** Layer (stack) the screen is pushed onto. Empty falls back to the Menu layer. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen", meta = (Categories = "CoreFramework.UI.Layer"))
+	/** Layer (stack) the screen is pushed onto: one of the CoreFramework.UI.Layer.* tags or a project layer. Empty falls back to the Menu layer. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Screen")
 	FGameplayTag LayerTag;
 
 	/** When false, pushing a screen that is already open returns the open instance instead of stacking a second one. */
@@ -274,7 +359,7 @@ struct COREFRAMEWORK_API FUITabDescriptor
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tab")
 	int32 SortOrder = 0;
 
-	/** Set false on an overriding descriptor to remove a tab that a framework default provides. */
+	/** Set false on an overriding descriptor to remove a tab that another source provides. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tab")
 	bool bEnabled = true;
 };
@@ -290,7 +375,7 @@ struct COREFRAMEWORK_API FUIHUDElementDescriptor
 	FName ElementId = NAME_None;
 
 	/** Slot registered on the HUD widget (UBaseHUDWidget::RegisterElementSlot). */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Element", meta = (Categories = "CoreFramework.UI.HUDSlot"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Element")
 	FGameplayTag SlotTag;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "HUD Element")
@@ -298,21 +383,21 @@ struct COREFRAMEWORK_API FUIHUDElementDescriptor
 };
 ```
 
-### 4.2 `UIConfigDataAsset.h` — the data-driven entry point
+### 4.2 `Data/UIConfigDataAsset.h` — the data-driven entry point (instances live in the game)
 
 ```cpp
-// CoreFramework UI System
+// CoreFramework UI System - Data
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
-#include "UISystem/UITypes.h"
+#include "UISystem/Core/UITypes.h"
 #include "UIConfigDataAsset.generated.h"
 
 class UBaseRootLayoutWidget;
 
-/** A reusable list of tabs. Create one per menu (or one per feature) in the Content Browser. */
+/** A reusable list of tabs. Create one per tabbed menu in the game project's Content Browser. */
 UCLASS(BlueprintType)
 class COREFRAMEWORK_API UUITabSetDataAsset : public UPrimaryDataAsset
 {
@@ -323,23 +408,10 @@ public:
 	TArray<FUITabDescriptor> Tabs;
 };
 
-/** Attaches a tab set to a menu id so a child project can extend a framework menu without editing it. */
-USTRUCT(BlueprintType)
-struct COREFRAMEWORK_API FUIMenuTabSetBinding
-{
-	GENERATED_BODY()
-
-	/** Must match UBaseMenuWidget::MenuTag of the menu that should receive the tabs. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tabs", meta = (Categories = "CoreFramework.UI.Screen"))
-	FGameplayTag MenuTag;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tabs")
-	TSoftObjectPtr<UUITabSetDataAsset> TabSet;
-};
-
 /**
- * The single data-driven entry point of the UI system. One asset per project, assigned in
+ * The single data-driven entry point of the UI system. One asset per game project, assigned in
  * Project Settings > CoreFramework > CoreFramework UI. Everything is soft-referenced.
+ * The framework ships no content for it: the game fills every list.
  */
 UCLASS(BlueprintType)
 class COREFRAMEWORK_API UUIConfigDataAsset : public UPrimaryDataAsset
@@ -358,14 +430,10 @@ public:
 	/** Widgets injected into HUD slots. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "HUD", meta = (TitleProperty = "ElementId"))
 	TArray<FUIHUDElementDescriptor> HUDElements;
-
-	/** Tab sets attached to menus by tag. Several entries may target the same menu; their tabs are merged. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Menus", meta = (TitleProperty = "MenuTag"))
-	TArray<FUIMenuTabSetBinding> MenuTabSets;
 };
 ```
 
-### 4.3 `UIFrameSubsystem.h` — the manager
+### 4.3 `Manager/UIFrameSubsystem.h` — the manager
 
 ```cpp
 // CoreFramework UI System
@@ -374,7 +442,7 @@ public:
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
-#include "UISystem/UITypes.h"
+#include "UISystem/Core/UITypes.h"
 #include "UIFrameSubsystem.generated.h"
 
 class APawn;
@@ -580,7 +648,7 @@ private:
 };
 ```
 
-### 4.4 `BaseUIBinderInterface.h` — observer contract
+### 4.4 `Binding/BaseUIBinderInterface.h` — observer contract
 
 ```cpp
 // CoreFramework UI System
@@ -640,7 +708,7 @@ public:
 };
 ```
 
-### 4.5 `BaseUserWidget.h` — plain widget base
+### 4.5 `Foundation/BaseUserWidget.h` — plain widget base
 
 ```cpp
 // CoreFramework UI System
@@ -650,7 +718,8 @@ public:
 #include "CommonUserWidget.h"
 #include "Engine/DataTable.h"
 #include "Input/UIActionBindingHandle.h"
-#include "UISystem/BaseUIBinderInterface.h"
+#include "UISystem/Binding/BaseUIBinderInterface.h"
+#include "UISystem/Core/UITypes.h"
 #include "BaseUserWidget.generated.h"
 
 class APawn;
@@ -658,8 +727,6 @@ class APlayerController;
 class APlayerState;
 class UUIFrameSubsystem;
 class UWidgetAnimation;
-
-DECLARE_DYNAMIC_DELEGATE(FBaseUIActionDelegate);
 
 /**
  * Base class for every non-activatable widget in the framework (HUD elements, tab content, list entries...).
@@ -768,7 +835,7 @@ private:
 };
 ```
 
-### 4.6 `BaseActivatableWidget.h` — screen base (CommonUI)
+### 4.6 `Foundation/BaseActivatableWidget.h` — screen base (CommonUI)
 
 ```cpp
 // CoreFramework UI System
@@ -780,8 +847,8 @@ private:
 #include "Engine/GameViewportClient.h"
 #include "GameplayTagContainer.h"
 #include "Input/UIActionBindingHandle.h"
-#include "UISystem/BaseUIBinderInterface.h"
-#include "UISystem/UITypes.h"
+#include "UISystem/Binding/BaseUIBinderInterface.h"
+#include "UISystem/Core/UITypes.h"
 #include "BaseActivatableWidget.generated.h"
 
 class APawn;
@@ -790,8 +857,6 @@ class APlayerState;
 class UUIFrameSubsystem;
 class UWidget;
 class UWidgetAnimation;
-
-DECLARE_DYNAMIC_DELEGATE(FBaseActivatableActionDelegate);
 
 /**
  * Base class for every screen that lives on a layer stack (menus, popups, HUD, notifications).
@@ -864,7 +929,7 @@ public:
 
 	/** Binds a CommonUI input action row. Automatically unbound when the widget is destroyed. */
 	UFUNCTION(BlueprintCallable, Category = "Base UI|Input")
-	void BindUIAction(const FDataTableRowHandle& ActionRow, bool bShowInActionBar, FBaseActivatableActionDelegate OnExecuted);
+	void BindUIAction(const FDataTableRowHandle& ActionRow, bool bShowInActionBar, FBaseUIActionDelegate OnExecuted);
 
 	FUIActionBindingHandle BindUIActionNative(const FDataTableRowHandle& ActionRow, bool bShowInActionBar, const FSimpleDelegate& OnExecuted);
 
@@ -936,7 +1001,61 @@ private:
 };
 ```
 
-### 4.7 `BaseHUDWidget.h` — master HUD container
+### 4.7 `Foundation/BaseButton.h` — button parent
+
+```cpp
+// CoreFramework UI System - Foundation
+#pragma once
+
+#include "CoreMinimal.h"
+#include "CommonButtonBase.h"
+#include "BaseButton.generated.h"
+
+class UCommonTextBlock;
+
+/**
+ * Parent class for every button of a game project (menu buttons, tab buttons, popup buttons).
+ *
+ * It solves one beginner trap of CommonUI: giving each button instance its own text.
+ *  - Add a Common Text widget named exactly LabelText inside the button Blueprint.
+ *  - Type the text in the Button Label property of each placed button (visible in the Designer preview).
+ *  - Change it at runtime with SetButtonLabel.
+ * Appearance (colors, hover, pressed, selected) comes from the CommonButtonStyle asset the Blueprint
+ * references. The framework ships no style and no art.
+ */
+UCLASS(Abstract, Blueprintable)
+class COREFRAMEWORK_API UBaseButton : public UCommonButtonBase
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Button")
+	void SetButtonLabel(const FText& InLabel);
+
+	UFUNCTION(BlueprintPure, Category = "Base UI|Button")
+	FText GetButtonLabel() const { return ButtonLabel; }
+
+protected:
+	virtual void NativePreConstruct() override;
+
+	/** Fired whenever the label text is applied (designer preview, construct, SetButtonLabel). */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Base UI|Button", meta = (DisplayName = "On Button Label Changed"))
+	void BP_OnButtonLabelChanged(const FText& InLabel);
+
+	/** Text shown by the button. Editable on every placed instance in the Details panel. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Button")
+	FText ButtonLabel;
+
+	/** Optional Common Text widget named exactly LabelText. */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UCommonTextBlock> LabelText;
+
+private:
+	void ApplyLabel();
+};
+```
+
+### 4.8 `HUD/BaseHUDWidget.h` — HUD container
 
 ```cpp
 // CoreFramework UI System
@@ -944,8 +1063,8 @@ private:
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
-#include "UISystem/BaseActivatableWidget.h"
-#include "UISystem/UITypes.h"
+#include "UISystem/Foundation/BaseActivatableWidget.h"
+#include "UISystem/Core/UITypes.h"
 #include "BaseHUDWidget.generated.h"
 
 class UBaseUserWidget;
@@ -1017,7 +1136,47 @@ private:
 };
 ```
 
-### 4.8 `BaseMenuWidget.h` — menus with a data driven tab bar
+### 4.9 `HUD/BaseHUD.h` — bootstrap actor
+
+```cpp
+// CoreFramework UI System
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/HUD.h"
+#include "GameplayTagContainer.h"
+#include "BaseHUD.generated.h"
+
+/**
+ * Bootstrap actor for the UI system. Set it as the HUD class of the GameMode.
+ *
+ * AHUD exists only for local player controllers (listen-server host and clients, never on a dedicated server),
+ * which makes BeginPlay the correct, multiplayer-safe moment to start the UI of that local player.
+ * It draws nothing itself; all UI is UMG through UUIFrameSubsystem.
+ *
+ * Projects that already own an AHUD subclass can skip this class and call
+ * UUIFrameSubsystem::InitializeForPlayerController / ReleasePlayerController from their own HUD.
+ */
+UCLASS()
+class COREFRAMEWORK_API ABaseHUD : public AHUD
+{
+	GENERATED_BODY()
+
+public:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+protected:
+	/**
+	 * Screens pushed when the UI starts for this map / game mode, in order. Put the HUD first, overlays after.
+	 * Main menu map: [your main menu screen tag]. Gameplay map: [your HUD screen tag].
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Base UI")
+	TArray<FGameplayTag> StartupScreens;
+};
+```
+
+### 4.10 `Menu/BaseMenuWidget.h` — menus with a data driven tab bar
 
 ```cpp
 // CoreFramework UI System
@@ -1025,11 +1184,11 @@ private:
 
 #include "CoreMinimal.h"
 #include "GameplayTagContainer.h"
-#include "UISystem/BaseActivatableWidget.h"
-#include "UISystem/UITypes.h"
+#include "UISystem/Foundation/BaseActivatableWidget.h"
+#include "UISystem/Core/UITypes.h"
 #include "BaseMenuWidget.generated.h"
 
-class UBaseTabButton;
+class UBaseButton;
 class UBaseTabWidget;
 class UCommonButtonBase;
 class UCommonTabListWidgetBase;
@@ -1042,9 +1201,9 @@ struct FStreamableHandle;
  *
  * Works with or without tabs. When the Blueprint contains a Common Tab List named TabList and a
  * Widget Switcher named TabSwitcher, the menu builds its tabs from data:
- *   DefaultTabSet (this widget)  <  UUIConfigDataAsset::MenuTabSets  <  UUIFrameSubsystem::RegisterMenuTab
+ *   DefaultTabSet (assigned on this widget)  <  UUIFrameSubsystem::RegisterMenuTab (runtime, plugins / game features)
  * Later sources override earlier ones by TabId, so a project can replace or disable (bEnabled = false)
- * a framework tab without touching framework assets. Tab content classes are async loaded.
+ * a tab provided by another source. Tab content classes are async loaded.
  */
 UCLASS(Abstract, Blueprintable)
 class COREFRAMEWORK_API UBaseMenuWidget : public UBaseActivatableWidget
@@ -1090,17 +1249,17 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Base UI|Menu", meta = (DisplayName = "On Active Tab Changed"))
 	void BP_OnActiveTabChanged(FName TabId);
 
-	/** Id used to receive tabs registered through the config asset or the subsystem. Leave empty for menus without extensions. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Menu", meta = (Categories = "CoreFramework.UI.Screen"))
+	/** Id used to receive tabs registered at runtime through the subsystem. Use the same tag you registered this screen with. Leave empty when no runtime tabs are expected. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Menu")
 	FGameplayTag MenuTag;
 
-	/** Tabs that ship with this menu Blueprint. */
+	/** Tabs of this menu. Create a UITabSetDataAsset in the game project and assign it here. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Menu")
 	TObjectPtr<UUITabSetDataAsset> DefaultTabSet;
 
-	/** Button Blueprint (child of UBaseTabButton) instantiated for each tab. Required when tabs are used. */
+	/** Button Blueprint (child of UBaseButton) instantiated for each tab. Required when tabs are used. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Menu")
-	TSubclassOf<UBaseTabButton> TabButtonClass;
+	TSubclassOf<UBaseButton> TabButtonClass;
 
 	/** Optional Common Tab List named exactly TabList. */
 	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
@@ -1133,15 +1292,15 @@ private:
 };
 ```
 
-### 4.9 `BaseTabWidget.h` — tab page
+### 4.11 `Menu/Tabs/BaseTabWidget.h` — tab page
 
 ```cpp
 // CoreFramework UI System
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UISystem/BaseUserWidget.h"
-#include "UISystem/UITypes.h"
+#include "UISystem/Foundation/BaseUserWidget.h"
+#include "UISystem/Core/UITypes.h"
 #include "BaseTabWidget.generated.h"
 
 class UWidget;
@@ -1219,47 +1378,7 @@ private:
 };
 ```
 
-### 4.10 `BaseHUD.h` — bootstrap actor
-
-```cpp
-// CoreFramework UI System
-#pragma once
-
-#include "CoreMinimal.h"
-#include "GameFramework/HUD.h"
-#include "GameplayTagContainer.h"
-#include "BaseHUD.generated.h"
-
-/**
- * Bootstrap actor for the UI system. Set it as the HUD class of the GameMode.
- *
- * AHUD exists only for local player controllers (listen-server host and clients, never on a dedicated server),
- * which makes BeginPlay the correct, multiplayer-safe moment to start the UI of that local player.
- * It draws nothing itself; all UI is UMG through UUIFrameSubsystem.
- *
- * Projects that already own an AHUD subclass can skip this class and call
- * UUIFrameSubsystem::InitializeForPlayerController / ReleasePlayerController from their own HUD.
- */
-UCLASS()
-class COREFRAMEWORK_API ABaseHUD : public AHUD
-{
-	GENERATED_BODY()
-
-public:
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
-protected:
-	/**
-	 * Screens pushed when the UI starts for this map / game mode, in order. Put the HUD first, overlays after.
-	 * Main menu map: [Screen.MainMenu]. Gameplay map: [Screen.HUD].
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Base UI", meta = (Categories = "CoreFramework.UI.Screen"))
-	TArray<FGameplayTag> StartupScreens;
-};
-```
-
-The remaining headers (`UIBindingHub.h`, `BaseRootLayoutWidget.h`, `BaseTabButton.h`, `UIFrameSettings.h`, `UIGameplayTags.h`) are listed in the file manifest (section 9); they are short and documented in place.
+The remaining headers (`Binding/UIBindingHub.h`, `Layout/BaseRootLayoutWidget.h`, `Core/UIFrameSettings.h`, `Core/UIGameplayTags.h`) are short and documented in place; see the manifest in section 9.
 
 ---
 
@@ -1270,7 +1389,7 @@ The remaining headers (`UIBindingHub.h`, `BaseRootLayoutWidget.h`, `BaseTabButto
 A screen **declares** what it needs; CommonUI **applies** it. There is no central "SetInputMode" call to forget.
 
 ```
-UBaseActivatableWidget
+UBaseActivatableWidget (a game screen)
   InputMode            Default | GameOnly | UIOnly | GameAndUI
   GameMouseCaptureMode EMouseCaptureMode
         │  GetDesiredInputConfig()
@@ -1278,12 +1397,12 @@ UBaseActivatableWidget
   CommonUI action router  ──►  topmost active screen decides the input configuration
 ```
 
-| `EUIInputMode` | CommonUI mode | Typical user | Behavior |
+| `EUIInputMode` | CommonUI mode | Typical screen | Behavior |
 |---|---|---|---|
-| `GameOnly` | `Game` | `UBaseHUDWidget` (default) | Game gets input, mouse captured per `GameMouseCaptureMode`. |
-| `UIOnly` | `Menu` | `UBaseMenuWidget` (default), popups | UI gets input, cursor visible, game input blocked. |
-| `GameAndUI` | `All` | Live overlays (quick inventory with mouse) | UI first, unconsumed input still reaches the game. Combine with *Ignore Look Input While Active* so the mouse does not turn the camera. |
-| `Default` | none | Notifications, toasts | Does not request a configuration; the underlying screen's stays active. |
+| `GameOnly` | `Game` | HUD (`UBaseHUDWidget` default) | Game gets input, mouse captured per `GameMouseCaptureMode`. |
+| `UIOnly` | `Menu` | Menus (`UBaseMenuWidget` default), popups | UI gets input, cursor visible, game input blocked. |
+| `GameAndUI` | `All` | Live overlays (quick inventory with mouse) | UI first, unconsumed input still reaches the game. Combine with *Ignore Look Input While Active*. |
+| `Default` | none | Notifications, toasts | No request; the underlying screen's configuration stays active. |
 
 Closing a menu reverts automatically to the configuration of the next topmost screen (the HUD). **Order matters:** CommonUI uses the most recently activated screen, so list the HUD first in `StartupScreens`.
 
@@ -1291,40 +1410,36 @@ Closing a menu reverts automatically to the configuration of the next topmost sc
 
 Three levels, first match wins:
 
-1. **Blueprint `Get Desired Focus Target`** (CommonUI's own hook) on the screen — full control.
-2. **`DefaultFocusWidget`**: a widget named exactly `DefaultFocusWidget` in the screen. The framework focuses it one tick after activation **only if nothing inside the screen has focus yet**.
-3. **Menus with tabs**: when no explicit target exists, focus lands on the button of the active tab (`UBaseMenuWidget::ResolveDefaultFocusWidget`).
+1. **Blueprint `Get Desired Focus Target`** (CommonUI's own hook) on the screen.
+2. **`DefaultFocusWidget`**: a widget named exactly `DefaultFocusWidget`. Focused one tick after activation **only if nothing inside the screen has focus yet**.
+3. **Menus with tabs**: when no explicit target exists, focus lands on the button of the active tab.
 
-Inside a screen, directional navigation is Slate's: keep buttons focusable and laid out in a grid/list. When the player switches device, CommonUI re-applies focus / hides the cursor for you.
-
-Tab pages (`UBaseTabWidget`) have their own optional `DefaultFocusWidget` and `bFocusContentOnSelect` (off by default so gamepad bumpers keep switching tabs).
+Tab pages have their own optional `DefaultFocusWidget` and `bFocusContentOnSelect` (off by default so gamepad bumpers keep switching tabs).
 
 ### 5.3 Back, modal, pause, suppression
 
 | Need | How |
 |---|---|
-| Escape / gamepad B closes the screen | Tick **Is Back Handler** in the screen Blueprint's class defaults (CommonUI). Requires the default back action in the CommonUI input data (setup guide, Step 5). |
+| Escape / gamepad B closes the screen | Tick **Is Back Handler** in the screen Blueprint's class defaults. Needs the default back action in the CommonUI input data (guide, Step 3.3). |
 | Popup blocks everything below | Tick **Is Modal**; push on the **Modal** layer. |
-| Pause the game while open | `bPauseGameWhileActive` (single player / listen-server host). Released on deactivation and in a destruct safety net. |
-| Stop camera / movement while a live overlay is open | `bIgnoreLookInputWhileActive`, `bIgnoreMoveInputWhileActive`. Counters on the controller are applied once per activation and always released. |
-| Close from a button | `CloseScreen()` on the widget (Blueprint callable). |
+| Pause the game while open | `bPauseGameWhileActive` (single player / listen-server host). |
+| Stop camera / movement while a live overlay is open | `bIgnoreLookInputWhileActive`, `bIgnoreMoveInputWhileActive`. Applied once per activation and always released. |
+| Close from a button | `CloseScreen()` on the widget. |
 
 ### 5.4 Enhanced Input
 
-* Gameplay input (move, look, jump…) stays in your gameplay `UInputMappingContext`s, handled by `ABaseCharacter`/`UInputConfigData` as before.
-* UI actions (back, confirm, tab left/right) are **CommonUI input actions** (`FDataTableRowHandle` rows). With *Enable Enhanced Input Support* in the CommonUI input settings, each row can reference an `UInputAction`, so UI and gameplay share the same rebinding source.
-* `BindUIAction` / `BindUIActionNative` bind such a row to a delegate; the binding is removed automatically with the widget.
+* Gameplay input stays in your gameplay `UInputMappingContext`s (`ABaseCharacter` / `UInputConfigData`).
+* UI actions (back, confirm, tab left/right) are **CommonUI input actions** (`FDataTableRowHandle` rows). With *Enable Enhanced Input Support* each row can reference an `UInputAction`.
+* `BindUIAction` / `BindUIActionNative` bind a row to a delegate; removed automatically with the widget.
 * `UIOnly` screens block gameplay input at the Slate level, so no mapping-context juggling is needed.
 
 ### 5.5 Mouse, keyboard, gamepad switching
 
-* Detection and cursor/focus switching: CommonUI (`CommonGameViewportClient` + input settings).
-* Query: `UUIFrameSubsystem::IsUsingGamepad()`, `UBaseUserWidget::IsUsingGamepad()`, `UBaseActivatableWidget::IsUsingGamepad()`.
-* Glyphs: CommonUI buttons/action bars use the per-platform controller data assets (Step 5).
+Detection and cursor/focus switching: CommonUI (`CommonGameViewportClient` + input settings). Query: `IsUsingGamepad()` on the subsystem and on both widget bases.
 
 ### 5.6 Split screen
 
-Every local player has its own `UUIFrameSubsystem`, root layout, binding hub and CommonUI router. Widgets always resolve the subsystem through their **owning local player**.
+Every local player has its own `UUIFrameSubsystem`, root layout, binding hub and CommonUI router. Widgets resolve the subsystem through their **owning local player**.
 
 ---
 
@@ -1332,21 +1447,20 @@ Every local player has its own `UUIFrameSubsystem`, root layout, binding hub and
 
 ### 6.1 Contract (`IBaseUIBinderInterface`)
 
-Six events: Controller / PlayerState / Pawn × Bound / Unbound. Implemented natively by `UBaseUserWidget` and `UBaseActivatableWidget` (empty defaults), so a child widget overrides only what it needs, in C++ (`OnUIPawnBound_Implementation`) or in Blueprint (override event).
+Six events: Controller / PlayerState / Pawn × Bound / Unbound. Implemented natively by `UBaseUserWidget` and `UBaseActivatableWidget` (empty defaults), so a child widget overrides only what it needs, in C++ (`OnUIPawnBound_Implementation`) or Blueprint (override event).
 
 ### 6.2 Scenario table
 
 | Scenario | What the hub does | What your widget sees |
 |---|---|---|
 | HUD created before the pawn exists (client join, map load) | Safety-net timer / `OnPossessedPawnChanged` detects the pawn when it arrives | `OnUIPawnBound(Pawn)` once |
-| Widget created after the pawn exists | Replay at registration | `OnUIControllerBound`, `OnUIPlayerStateBound`, `OnUIPawnBound` immediately after `Event Construct` |
+| Widget created after the pawn exists | Replay at registration | Controller / PlayerState / Pawn Bound right after `Event Construct` |
 | Unpossess (pawn becomes null) | Refresh | `OnUIPawnUnbound(oldPawn)` |
 | Respawn (new pawn) | Refresh | `OnUIPawnUnbound(old)` then `OnUIPawnBound(new)` |
 | Old pawn destroyed before the unbound call | Refresh | `OnUIPawnUnbound(nullptr)` — use what you cached |
 | PlayerState arrives late / is replaced | Refresh | `OnUIPlayerStateUnbound/Bound` |
 | Controller destroyed (travel, disconnect) | Refresh detects the stale controller, `Stop()` | `…Unbound` for pawn, player state, controller |
 | Widget destroyed while bound | `UnregisterBinder` | Matching `…Unbound` calls so it can drop subscriptions |
-| Host / listen server | Same code path (local controller) | Same events |
 | Dedicated server | No `AHUD`, no local player, no subsystem | Nothing is created |
 
 ### 6.3 Rules for implementers
@@ -1360,50 +1474,40 @@ Six events: Controller / PlayerState / Pawn × Bound / Unbound. Implemented nati
 
 ## 7. Extensibility design
 
-Nothing in this chapter requires editing a CoreFramework file.
+Nothing here requires editing a CoreFramework file. The framework ships no content, so "extending" means "creating the game's content".
 
-### 7.1 Add or change tabs (Settings, Main Menu)
+### 7.1 Create screens (menus, popups, overlays)
 
-Tab sources are merged in this order; a later source **replaces** an earlier tab with the same `TabId`:
+1. Create a gameplay tag (`UI.Screen.Inventory`) in the game project.
+2. Create a Widget Blueprint in the game project with the right parent (`UBaseMenuWidget` for menus, `UBaseActivatableWidget` for everything else on a layer, `UBaseHUDWidget` for the HUD).
+3. Add a `FUIScreenDefinition` row (tag, class, layer) to `DA_UIConfig.Screens` — or call `RegisterScreen` at runtime.
+4. `PushScreen(UI.Screen.Inventory)` works from anywhere.
+
+### 7.2 Tabs (Settings, Main Menu)
+
+Tab sources are merged in this order; a later source **replaces** a tab with the same `TabId`:
 
 ```
-UBaseMenuWidget::DefaultTabSet                (tabs that ship with the framework menu Blueprint)
-  <  UUIConfigDataAsset::MenuTabSets          (data asset of the game project, keyed by MenuTag)
-  <  UUIFrameSubsystem::RegisterMenuTab       (runtime: game code, plugins, game features)
+UBaseMenuWidget::DefaultTabSet                (UITabSetDataAsset assigned on the game's menu Blueprint)
+  <  UUIFrameSubsystem::RegisterMenuTab       (runtime: game code, plugins, game features — keyed by MenuTag)
 ```
 
 | Goal | Do |
 |---|---|
-| Add a "Gameplay" tab | Create `WBP_Tab_Gameplay` (child of `UBaseTabWidget`), create `DA_Game_SettingsTabs` (`UITabSetDataAsset`) with a descriptor, add `{ MenuTag = Screen.Settings, TabSet = DA_Game_SettingsTabs }` to `DA_UIConfig.MenuTabSets`. |
-| Replace the Graphics tab | Same, with `TabId = Graphics` and your own widget class. |
-| Remove the Controls tab | Descriptor with `TabId = Controls`, `Enabled = false`. |
-| Add a tab from a plugin at runtime | `Subsystem->RegisterMenuTab(FUITags::ScreenSettings(), Descriptor);` — an open menu rebuilds immediately. |
+| Add a "Gameplay" tab | New `WBP_Tab_Gameplay` (parent `UBaseTabWidget`) + a row in the menu's `DA_Settings_Tabs`. |
 | Reorder | `SortOrder` (lower first). |
+| Remove a tab at runtime | Register a descriptor with the same `TabId` and `Enabled = false`. |
+| Add a tab from a plugin / game feature | `Subsystem->RegisterMenuTab(MenuTag, Descriptor);` — an open menu rebuilds immediately (needs `Menu Tag` set on the menu). |
 
-C++ example:
+### 7.3 HUD elements
 
-```cpp
-FUITabDescriptor Tab;
-Tab.TabId = TEXT("Accessibility");
-Tab.DisplayName = NSLOCTEXT("MyGame", "TabAccessibility", "Accessibility");
-Tab.TabWidgetClass = TSoftClassPtr<UBaseTabWidget>(FSoftObjectPath(TEXT("/Game/UI/Settings/WBP_Tab_Accessibility.WBP_Tab_Accessibility_C")));
-Tab.SortOrder = 50;
-UI->RegisterMenuTab(FUITags::ScreenSettings(), Tab);
-```
+1. Create the widget (parent `UBaseUserWidget` or a game C++ child; it binds itself — Step 5 of the guide).
+2. Add `FUIHUDElementDescriptor { ElementId, SlotTag, WidgetClass }` to `DA_UIConfig.HUDElements`, **or** call `RegisterHUDElement` at runtime. A live HUD spawns it immediately; `UnregisterHUDElement` removes it.
+3. Slots: the game's HUD Blueprint names one panel `DefaultElementSlot` (tag `CoreFramework.UI.HUDSlot.Default`) and registers any number of custom slots in `Event Construct` with `RegisterElementSlot(Tag, Panel)`. An element whose slot does not exist yet is placed as soon as the slot is registered.
 
-### 7.2 Add HUD elements
+### 7.4 Layers
 
-1. Create the widget (child of `UBaseUserWidget`, it binds itself — see Step 4 of the guide).
-2. Add `FUIHUDElementDescriptor { ElementId, SlotTag, WidgetClass }` to `DA_UIConfig.HUDElements`, **or** call `UUIFrameSubsystem::RegisterHUDElement` at runtime (e.g. when a game feature activates). A live HUD spawns it immediately; `UnregisterHUDElement` removes it.
-3. Slots: the HUD Blueprint exposes `DefaultElementSlot` (tag `CoreFramework.UI.HUDSlot.Default`) and any number of custom slots registered in `Event Construct` with `RegisterElementSlot(Tag, Panel)`. An element whose slot does not exist yet is placed as soon as the slot is registered.
-
-### 7.3 Add game-specific menus and popups
-
-Add a tag (`Game.UI.Screen.Inventory`), a Blueprint child of `UBaseMenuWidget` / `UBaseActivatableWidget`, and a `FUIScreenDefinition` row in `DA_UIConfig.Screens` (or `RegisterScreen` at runtime). `PushScreen(Game.UI.Screen.Inventory)` works from anywhere.
-
-### 7.4 Add layers
-
-Add a tag (`Game.UI.Layer.Cinematic`), add a `Common Activatable Widget Stack` to your root layout child Blueprint, call `RegisterLayer(Tag, Stack)` in its `Event Construct`, and reference the tag in a screen definition.
+Duplicate `WBP_BaseRootLayout` into the game project, add a stack, call `RegisterLayer(Tag, Stack)` in its `Event Construct`, point `DA_UIConfig.RootLayoutClass` at the duplicate, and reference the layer tag in screen definitions.
 
 ### 7.5 Subclass in C++
 
@@ -1411,71 +1515,114 @@ All base classes are `Blueprintable` and expose virtual hooks (`ResolveDefaultFo
 
 ### 7.6 What stays out of CoreFramework
 
-HP / mana / ammo widgets, inventory, quest tracker, any `#include` of game code. Those are game-module widgets registered through 7.2.
+Any visual design, any screen, HP / mana / ammo widgets, inventory, quest tracker, any `#include` of game code.
 
 ---
 
 ## 8. Performance and memory notes
 
-* **No hitch on open:** class streaming is asynchronous; classes already in memory push synchronously; `Preload And Keep Resident` removes even the first-open cost for hot screens (pause menu).
-* **Binding cost:** the safety-net timer compares three pointers per interval (default 0.2 s per local player). Set `BindingPollIntervalSeconds = 0` to rely on events only if you control every pawn change path.
+* **No hitch on open:** class streaming is asynchronous; classes already in memory push synchronously; `Preload And Keep Resident` removes even the first-open cost for hot screens.
+* **Binding cost:** the safety-net timer compares three pointers per interval (default 0.2 s per local player). `BindingPollIntervalSeconds = 0` relies on events only.
 * **Duplicate loads:** concurrent pushes of the same screen share one in-flight request.
-* **Teardown:** root layout, handles and queued requests are invalidated by a session counter, so late completions from a previous map cannot push into a new session.
-* **Pooling:** CommonUI containers pool widget instances; registration/unregistration is tied to `NativeConstruct/NativeDestruct`, which pooling pairs correctly.
+* **Teardown:** a session counter invalidates queued requests, so late completions of a previous map cannot push into a new session.
+* **Pooling:** CommonUI containers pool widget instances; registration is tied to `NativeConstruct/NativeDestruct`, which pooling pairs correctly.
 
 ---
 
-## 9. File manifest
+## 9. Manifests
 
-```
-Source/CoreFramework/Public/UISystem/
-  UITypes.h                 enums, descriptors, log category
-  UIGameplayTags.h          FUITags (native tags: layers, screens, default HUD slot)
-  UIConfigDataAsset.h       UUIConfigDataAsset, UUITabSetDataAsset, FUIMenuTabSetBinding
-  UIFrameSettings.h         Project Settings > CoreFramework > CoreFramework UI
-  UIFrameSubsystem.h        manager
-  UIBindingHub.h            observer hub
-  BaseUIBinderInterface.h   IBaseUIBinderInterface
-  BaseUserWidget.h          plain widget base
-  BaseActivatableWidget.h   screen base
-  BaseHUDWidget.h           HUD container
-  BaseMenuWidget.h          menu + tab bar
-  BaseTabWidget.h           tab page
-  BaseTabButton.h           tab bar button
-  BaseRootLayoutWidget.h    layer stacks
-  BaseHUD.h                 bootstrap AHUD
-Source/CoreFramework/Private/UISystem/
-  (one .cpp per header except UITypes / UIConfigDataAsset / UIFrameSettings / interface)
-Setup/                      Build.cs, uplugin and ini snippets
-Docs/                       this document + setup guide
-```
+### 9.1 C++ (framework)
 
-Include style: `#include "UISystem/BaseUserWidget.h"` (works for both a `Public/` layout and a flat module root).
+| Folder | Files | Contains |
+|---|---|---|
+| `Core/` | `UITypes.h`, `UIGameplayTags.h/.cpp`, `UIFrameSettings.h` | enums, descriptors, log category, native tags, Project Settings page |
+| `Data/` | `UIConfigDataAsset.h` | `UUIConfigDataAsset`, `UUITabSetDataAsset` |
+| `Manager/` | `UIFrameSubsystem.h/.cpp` | manager |
+| `Binding/` | `BaseUIBinderInterface.h`, `UIBindingHub.h/.cpp` | observer contract and hub |
+| `Layout/` | `BaseRootLayoutWidget.h/.cpp` | layer stacks container |
+| `Foundation/` | `BaseUserWidget`, `BaseActivatableWidget`, `BaseButton` (.h/.cpp each) | parents of all game widgets |
+| `HUD/` | `BaseHUD`, `BaseHUDWidget` (.h/.cpp each) | bootstrap actor, HUD container |
+| `Menu/` | `BaseMenuWidget.h/.cpp` | menu with tab bar |
+| `Menu/Tabs/` | `BaseTabWidget.h/.cpp` | tab page |
+
+15 headers, 11 sources.
+
+### 9.2 Blueprint content
+
+| Location | Assets |
+|---|---|
+| Plugin `Content/UI/Layout/` | `WBP_BaseRootLayout` — **the only one** |
+| Game `Content/UI/...` | everything else (Section 3.3) |
 
 ---
 
-## 10. Known limits
+## 10. Audit results (v1 → v2)
 
-* A new level that uses a different HUD class recreates the root layout; screens do not survive map travel (by design — the UI belongs to the HUD's lifetime).
-* `bPauseGameWhileActive` follows engine pause rules: effective in single player and for the listen-server host, not a replicated pause for clients.
-* Tab pages are created for all enabled tabs when the menu builds (async loaded, then instantiated). For very heavy tab pages, make the page itself lazy (construct heavy children in `OnTabSelected`).
+### 10.1 Verdict per C++ class
+
+| Class | Verdict | Reason |
+|---|---|---|
+| `UUIFrameSubsystem` | **Keep** | Core manager. |
+| `UUIBindingHub`, `IBaseUIBinderInterface` | **Keep** | Player binding is a stated infrastructure responsibility. |
+| `UBaseRootLayoutWidget` | **Keep** | Layer stack management. Its Blueprint is the one shipped asset. |
+| `UBaseActivatableWidget` | **Keep** | Parent of every screen: input mode, focus, back, side effects. |
+| `UBaseUserWidget` | **Keep** | Parent of HUD elements and anything that is not a screen. |
+| `UBaseHUDWidget` | **Keep** | Slots + HUD behavior. Contains no layout; slots are optional named bindings. |
+| `UBaseMenuWidget` | **Keep** | Data-driven tab building cannot be done in Blueprint cleanly. Tabs are optional, menus without tabs work. |
+| `UBaseTabWidget` | **Keep** | Tab page parent (selected/deselected events, Apply/Revert contract). |
+| `UBaseButton` | **New, replaces `UBaseTabButton`** | One parent for all buttons incl. tabs; fixes the "how do I give this button its own text" problem. |
+| `ABaseHUD`, `UUIFrameSettings`, data asset classes | **Keep** | Bootstrap, settings, data-driven config. |
+
+**Answer to "keep all base classes?"** Yes. Every class has a distinct responsibility and none contains a layout. The 15 headers / 11 sources count is unchanged: `BaseButton` replaced `BaseTabButton`.
+
+### 10.2 Things removed or changed
+
+| # | Change | Why |
+|---|---|---|
+| 1 | Removed native tags `Screen.HUD`, `Screen.MainMenu`, `Screen.PauseMenu`, `Screen.Settings` (`FUITags::Screen*`) | They pre-declared specific menus. Screen ids are game-owned now. Layers and `HUDSlot.Default` remain (pure infrastructure). |
+| 2 | Removed every `Categories = "CoreFramework.UI...."` tag filter | **Bug in v1:** the filter limited the tag picker to the framework's subtree, hiding the game's own tags (`UI.Screen.*`). |
+| 3 | Removed `UUIConfigDataAsset::MenuTabSets` and `FUIMenuTabSetBinding` | Their purpose was extending framework-shipped menus; there are none anymore. A menu now simply references its `DefaultTabSet`; plugins still use `RegisterMenuTab`. One tab source fewer, one synchronous load fewer. |
+| 4 | `UBaseTabButton` → `UBaseButton` (`ButtonLabel`, `LabelText`, `SetButtonLabel`) | See table above. |
+| 5 | One shared `FBaseUIActionDelegate` (in `UITypes.h`) instead of one per widget base | Duplicate declaration. |
+| 6 | Folder reorganisation | Responsibility folders (3.1). |
+| 7 | Blueprint content: only `WBP_BaseRootLayout` in the plugin | Menus / HUD / settings Blueprints moved to the game (guide, Steps 3–5). |
+
+### 10.3 Considered and kept
+
+| Item | Decision |
+|---|---|
+| `DefaultElementSlot` + `HUDSlot.Default` | Keep: an optional named binding, not a placed box. Lets a beginner add HUD elements without creating a tag first. |
+| `bPauseGameWhileActive`, look/move suppression | Keep: optional flags, off by default, cheap, input-flow behavior. |
+| `HasPendingChanges / ApplyChanges / RevertChanges` | Keep: optional empty defaults; the only way several tabs can share one Apply / Revert button without per-game glue. |
+| `ShowWidget / HideWidget` with `Anim_Show / Anim_Hide` | Keep: the "transition animations hook" requirement. |
+| Duplicated one-line helpers in the two widget bases (`GetBound*`, `BindUIAction`) | Keep: UObject single inheritance makes sharing awkward; a shared helper would add a file for ~10 lines. |
+| `PopTopOfLayer`, `ClearLayer`, `PreloadScreen`, `UnregisterScreen` | Keep: public API for game flow, a few lines each. |
+| Empty wrapper Blueprints (`WBP_BaseHUD`, `WBP_BaseMenu`…) | **Not created**: the C++ class is the parent. |
+
+---
+
+## 11. Known limits
+
+* A new level with a different HUD class recreates the root layout; screens do not survive map travel (by design).
+* `bPauseGameWhileActive` follows engine pause rules: single player and the listen-server host, not a replicated pause for clients.
+* Tab pages are created for all enabled tabs when the menu builds (async loaded, then instantiated). For heavy pages, construct heavy children in `On Tab Selected`.
 * Input configuration follows CommonUI's rule (most recently activated screen). Keep startup order HUD first.
+* Moving the folders changes include paths: code that included `"UISystem/BaseUserWidget.h"` must use `"UISystem/Foundation/BaseUserWidget.h"`.
 
 ---
 
 ## Appendix A — Engine API touchpoints
 
-These are the engine APIs the code depends on. If your exact engine version differs, the fix is local to the named file.
-
 | API | File | If it differs |
 |---|---|---|
-| `UCommonActivatableWidget::GetDesiredInputConfig()` → `TOptional<FUIInputConfig>`; `FUIInputConfig(ECommonInputMode, EMouseCaptureMode)`; `NativeOnActivated/NativeOnDeactivated` | `BaseActivatableWidget.*` | Mirror the signature used by Lyra's `ULyraActivatableWidget` in your engine version. |
-| `UCommonActivatableWidgetContainerBase::AddWidget<T>(Class, InitFunc)`, `RemoveWidget`, `GetActiveWidget`, `ClearWidgets` | `UIFrameSubsystem.cpp`, `BaseRootLayoutWidget.cpp` | Same names are used by Lyra's `UPrimaryGameLayout`. |
-| `UCommonTabListWidgetBase::RegisterTab`, `RemoveAllTabs`, `SelectTabByID`, `GetTabButtonBaseByID`, `OnTabSelected(FName, UCommonButtonBase*)` | `BaseMenuWidget.*` | Adjust the `HandleTabSelected` signature to the delegate declared in `CommonTabListWidgetBase.h`. |
-| `UCommonUserWidget::RegisterUIActionBinding(FBindUIActionArgs)`, `FBindUIActionArgs(FDataTableRowHandle, bool, FSimpleDelegate)` | `BaseUserWidget.cpp`, `BaseActivatableWidget.cpp` | Use the constructor overload your version offers. |
-| `UCommonInputSubsystem::GetCurrentInputType()`, `ECommonInputType::Gamepad` | `UIFrameSubsystem.cpp` | Header names `CommonInputSubsystem.h`, `CommonInputTypeEnum.h`. |
-| `AController::OnPossessedPawnChanged` (dynamic, 2 params) | `UIBindingHub.cpp` | The safety-net timer keeps the system correct even if you remove the binding. |
-| `FStreamableManager::RequestAsyncLoad(path/paths, delegate, priority, bManageActiveHandle)` | `UIFrameSubsystem.cpp`, `BaseHUDWidget.cpp`, `BaseMenuWidget.cpp` | Drop the last two arguments and hold the returned handle instead. |
-| `UE_DEFINE_GAMEPLAY_TAG_COMMENT` | `UIGameplayTags.cpp` | Use `UE_DEFINE_GAMEPLAY_TAG` (same effect, no comment). |
-| `UUserWidget::AddToPlayerScreen(int32)` | `UIFrameSubsystem.cpp` | Return type changed across versions; the return value is ignored. |
-| `UWidget::HasFocusedDescendants()` | `BaseActivatableWidget.cpp` | Use `HasUserFocusedDescendants(GetOwningPlayer())`. |
+| `UCommonActivatableWidget::GetDesiredInputConfig()` → `TOptional<FUIInputConfig>`; `FUIInputConfig(ECommonInputMode, EMouseCaptureMode)`; `NativeOnActivated/NativeOnDeactivated` | `Foundation/BaseActivatableWidget.*` | Mirror the signature used by Lyra's `ULyraActivatableWidget` in your engine version. |
+| `UCommonActivatableWidgetContainerBase::AddWidget<T>(Class, InitFunc)`, `RemoveWidget`, `GetActiveWidget`, `ClearWidgets` | `Manager/UIFrameSubsystem.cpp`, `Layout/BaseRootLayoutWidget.cpp` | Same names are used by Lyra's `UPrimaryGameLayout`. |
+| `UCommonTabListWidgetBase::RegisterTab`, `RemoveAllTabs`, `SelectTabByID`, `GetTabButtonBaseByID`, `OnTabSelected(FName, UCommonButtonBase*)` | `Menu/BaseMenuWidget.*` | Adjust the `HandleTabSelected` signature to the delegate declared in `CommonTabListWidgetBase.h`. |
+| `UCommonUserWidget::RegisterUIActionBinding(FBindUIActionArgs)`, `FBindUIActionArgs(FDataTableRowHandle, bool, FSimpleDelegate)` | `Foundation/BaseUserWidget.cpp`, `Foundation/BaseActivatableWidget.cpp` | Use the constructor overload your version offers. |
+| `UCommonButtonBase` as a parent; `UUserWidget::NativePreConstruct()` | `Foundation/BaseButton.*` | Both are stable; if a CommonButtonBase member named `ButtonLabel` or `LabelText` ever appears, rename ours. |
+| `UCommonInputSubsystem::GetCurrentInputType()`, `ECommonInputType::Gamepad` | `Manager/UIFrameSubsystem.cpp` | Headers `CommonInputSubsystem.h`, `CommonInputTypeEnum.h`. |
+| `AController::OnPossessedPawnChanged` (dynamic, 2 params) | `Binding/UIBindingHub.cpp` | The safety-net timer keeps the system correct even if you remove the binding. |
+| `FStreamableManager::RequestAsyncLoad(path/paths, delegate, priority, bManageActiveHandle)` | `Manager`, `HUD/BaseHUDWidget.cpp`, `Menu/BaseMenuWidget.cpp` | Drop the last two arguments and hold the returned handle instead. |
+| `UE_DEFINE_GAMEPLAY_TAG_COMMENT` | `Core/UIGameplayTags.cpp` | Use `UE_DEFINE_GAMEPLAY_TAG` (same effect, no comment). |
+| `UUserWidget::AddToPlayerScreen(int32)` | `Manager/UIFrameSubsystem.cpp` | Return type changed across versions; the return value is ignored. |
+| `UWidget::HasFocusedDescendants()` | `Foundation/BaseActivatableWidget.cpp` | Use `HasUserFocusedDescendants(GetOwningPlayer())`. |

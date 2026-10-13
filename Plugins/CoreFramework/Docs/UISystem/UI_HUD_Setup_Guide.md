@@ -1,38 +1,49 @@
-# CoreFramework UI & HUD System — Setup & Implementation Guide (v2)
+# CoreFramework UI & HUD System — Setup & Implementation Guide (v3)
 
 **Document:** `UI_HUD_Setup_Guide.md`
 **Companion:** `UI_HUD_System_Architecture.md` (design, diagrams, full headers)
 **Engine target:** Unreal Engine 5.5 – 5.8
 **Written for:** someone who is still learning Widget Blueprints (UMG) and CommonUI. Every editor action says **where** to click, **what** to type, and **why**.
 
+> **What is new in v3.** The guide is now split by **place**: what you do **once in the framework repo**, what you do **once per game project**, and what you do **per screen**. The CommonUI prerequisites (input actions table, input data) are now **plugin assets** created once in the framework repo, so a new game project gets them ready. The reusable buttons and styles stay in the game project. The folder `Bootstrap` is now called `Startup` and is explained. **No C++ changed.**
+
 > **Compile note.** The C++ was reviewed against the UE 5.5–5.8 CommonUI APIs but not compiled by its author. If your first build reports a signature mismatch, `UI_HUD_System_Architecture.md` → *Appendix A* names every engine call the system uses and the one-line fix.
 > **Editor note.** Menu names in the editor move slightly between engine versions. When a path in this guide does not match what you see, use the **search box** of the panel (Project Settings, Details, Palette, Content Browser all have one). The property names stay the same.
 
----
+## The badges used in this guide
+
+Every step starts with a badge that tells you **where** you are working and **how often**:
+
+| Badge | Meaning |
+|---|---|
+| `FRAMEWORK REPO · once` | You do it **one time** in the CoreFramework repository. Every game project gets the result automatically by importing the plugin. |
+| `GAME PROJECT · once per project` | One-time setup each time you start a **new game** that imports the plugin. |
+| `GAME PROJECT · per screen` | Normal day-to-day work: you build a screen, a HUD element, a tab. |
 
 ## Contents
 
 * **Read this first** — rules, editor vocabulary, how "named widgets" work, which parent class to pick
-* **What lives where** — plugin vs. game project
-* **Step 1 — Framework C++ (plugin)**
-* **Step 2 — Plugin base assets (plugin)** — the only Blueprint the plugin ships
-* **Step 3 — Game project foundation** — folders, CommonUI prerequisites, tags, buttons, config, HUD classes
-* **Step 4 — Build your game's UI from the base parents** — HUD, Main Menu, Pause Menu, Settings with tabs, Popup
-* **Step 5 — Bind gameplay data** — HP / Mana example
+* **Who does what** — framework repo vs. game project, and how to customize
+* **Step 1 — Framework C++** · `FRAMEWORK REPO · once`
+* **Step 2 — Framework Content: the shared assets** · `FRAMEWORK REPO · once`
+* **Step 3 — Game project setup** · `GAME PROJECT · once per project`
+* **Step 4 — Build your game's UI from the base parents** · `GAME PROJECT · per screen`
+* **Step 5 — Bind gameplay data** (HP / Mana example) · `GAME PROJECT · per gameplay element`
 * **Step 6 — Input and navigation, tests, troubleshooting**
 * **Final checklist**
 
 ---
 
+
 # 0. Read this first
 
 ## 0.1 The three rules of this framework
 
-1. **The plugin is infrastructure only.** It contains code that does the work (input modes, layers, loading, binding) and empty parent classes.
+1. **The plugin is infrastructure only.** It contains code that does the work (input modes, layers, loading, binding), empty parent classes, and the few shared assets every project needs identically (the root layout and the CommonUI input assets).
 2. **The plugin contains no designed UI.** No Main Menu, no HUD layout, no buttons with artwork, no styles.
 3. **Your game project owns every screen.** You create `WBP_MainMenu`, `WBP_HUD`, `WBP_Settings`… in your game project and choose the plugin's classes as their **parents**.
 
-*Why?* Every game looks different. If the plugin shipped a menu you would spend your time deleting or fighting it. With this split, updating the plugin never changes how your game looks.
+*Why?* Every game looks different. If the plugin shipped a menu you would spend your time deleting or fighting it. But the layer structure and the Back / Confirm / Tab keys are the same in every game, so those live in the plugin and you never rebuild them.
 
 ## 0.2 Editor vocabulary
 
@@ -59,7 +70,7 @@
 | Prefix | Means | Example |
 |---|---|---|
 | `WBP_` | Widget Blueprint | `WBP_MainMenu` |
-| `BP_` | Normal Blueprint (actors, styles, input data) | `BP_HUD_Gameplay` |
+| `BP_` | Normal Blueprint (actors, styles, input data) | `BP_Startup_Gameplay` |
 | `DA_` | Data Asset | `DA_UIConfig` |
 | `DT_` | Data Table | `DT_UI_Actions` |
 
@@ -92,38 +103,78 @@ Animations are also found by name: `Anim_Show` / `Anim_Hide` (`BaseUserWidget`),
 | A tab page inside a menu | `BaseTabWidget` | Gets selected / deselected events and the Apply / Revert contract. |
 | A HUD element (health bar, minimap) or any small piece | `BaseUserWidget` | Can bind itself to the player's pawn. |
 | A button | `BaseButton` | Has the label text feature. |
-| The class that starts the UI (a HUD actor) | `BaseHUD` | Starts and stops the UI for the local player. |
+| The *startup actor* that opens the first screens of a map (see 3.3) | `BaseHUD` | Starts and stops the UI for the local player. |
 
 There are **no** empty wrapper Blueprints such as `WBP_BaseHUD`. You use the C++ class directly as the parent.
 
 ---
 
-# 1. What lives where
-
-```
-PLUGIN  (Plugins/CoreFramework)                      GAME PROJECT  (<YourGame>)
-──────────────────────────────                       ───────────────────────────────────────
-C++ base classes (UISystem/...)        ──parents──►  WBP_HUD, WBP_MainMenu, WBP_PauseMenu,
-Content/UI/Layout/WBP_BaseRootLayout                 WBP_Settings, WBP_Tab_*, WBP_Button_*, WBP_Popup_*
-   (the ONLY Blueprint, 4 empty stacks)  ──used by─► DA_UIConfig  (points at WBP_BaseRootLayout)
-                                                     BP_HUD_*  (parents: BaseHUD)
-Nothing the player sees.                             Gameplay tags, styles, fonts, textures, input data
-```
-
-| Step | Where you work | Result |
-|---|---|---|
-| 1. Framework C++ | Plugin | The plugin compiles with the UI system |
-| 2. Plugin base assets | Plugin | `WBP_BaseRootLayout` exists |
-| 3. Game project foundation | Game | Folders, CommonUI settings, tags, buttons, `DA_UIConfig`, HUD classes |
-| 4. Build your UI | Game | HUD, menus, settings, popup working |
-| 5. Bind gameplay data | Game | A health bar that follows the player's pawn |
-| 6. Input and tests | Game | Mouse, keyboard and gamepad verified |
-
-Steps 1–2 are done **once** in the framework repository. Steps 3–6 are done **in every game project**.
 
 ---
 
-# Step 1 — Framework C++ (plugin)
+
+# Who does what
+
+## W.1 The three places
+
+```
+┌──────────────────────────────────────┐   ┌───────────────────────────────────────────────────────────────┐
+│ FRAMEWORK REPO  ·  once              │   │ GAME PROJECT                                                  │
+│ (shared by every game)               │   │                                                               │
+│                                      │   │  ONCE PER PROJECT (Step 3)        PER SCREEN (Steps 4–5)      │
+│ Step 1  C++ base classes             │   │  ─ pull the plugin                ─ WBP_HUD                   │
+│ Step 2  Plugin Content:              │──►│  ─ 3 project settings             ─ WBP_MainMenu, PauseMenu   │
+│   • WBP_BaseRootLayout               │   │  ─ folders                        ─ WBP_Settings + tab pages  │
+│   • DT_UI_Actions                    │   │  ─ gameplay tags                  ─ WBP_Popup_*               │
+│   • BP_CommonInputData               │   │  ─ buttons and styles             ─ HUD elements (health bar) │
+│                                      │   │  ─ DA_UIConfig                    ─ rows in DA_UIConfig       │
+│ No art. No menus. No layout.         │   │  ─ startup actors + game modes                                │
+└──────────────────────────────────────┘   └───────────────────────────────────────────────────────────────┘
+```
+
+## W.2 Every asset, and where it lives
+
+| Asset | Lives in | Why there | How you customize it |
+|---|---|---|---|
+| C++ base classes | **Framework repo** | Same behavior in every game | Create a child class / Blueprint in the game |
+| `WBP_BaseRootLayout` | **Framework repo** | Every game needs the same four empty layers | Rarely needed. For an extra layer: *Duplicate* it into the game (see W.4) |
+| `DT_UI_Actions` | **Framework repo** | Back / Confirm / Next Tab / Previous Tab are the same keys in every game | *Duplicate* it into the game (a table cannot have a child), see W.4 |
+| `BP_CommonInputData` | **Framework repo** | Tells CommonUI which table row means "back" and "click" | Create a **child Blueprint** in the game, see W.4 |
+| Gameplay tags (screens, HUD slots) | Game | Names of *your* screens | — |
+| `DA_UIConfig` | Game | It is the list of **your** screens; the plugin cannot know them | — |
+| Startup actors (`BP_Startup_*`) | Game | Say which of **your** screens a map opens | — |
+| Buttons and styles (`Components/`) | Game | Your look. Kept in the game folder for easy access | — |
+| Every screen / HUD / menu / popup | Game | The design | — |
+
+## W.3 The 3 project settings (why they are still done once per project)
+
+Three small settings are **stored in the game project's own config files**, not in the plugin. A plugin cannot write them for you. They take two minutes, they are done **once per project**, and they only *point at* assets that already exist:
+
+| Setting | Where (Project Settings, use the search box) | Value | Points at |
+|---|---|---|---|
+| Game Viewport Client Class | search `viewport client` | `CommonGameViewportClient` | an engine class |
+| Common Input Settings → Input Data | search `Common Input` | `BP_CommonInputData` | the **plugin's** asset (Step 2.5) |
+| CoreFramework UI → Default UI Config | search `CoreFramework UI` | your `DA_UIConfig` | **your** asset (Step 3.6) |
+
+## W.4 Customizing: child, or duplicate?
+
+Yes: when you want something different in one game, you **create a child in the game project** and leave the plugin untouched. Which method depends on the asset type:
+
+| Plugin asset | Type | Customize by |
+|---|---|---|
+| `BP_CommonInputData` | Blueprint class | **Child:** in the game, right-click → *Blueprint Class* → All Classes → search `BP_CommonInputData`, create `BP_GameInputData` from it, change what you need, then assign **it** in *Common Input Settings → Input Data*. |
+| `DT_UI_Actions` | Data Table | **A table cannot have a child.** *Duplicate* it into the game folder `Content/UI/Input/`, edit the copy, and make your child `BP_GameInputData` point to the copy. |
+| `WBP_BaseRootLayout` | Widget Blueprint | *Duplicate* it into the game (for example to add a fifth layer), then point `DA_UIConfig → Root Layout Class` at the copy. |
+| Any C++ base class | C++ class | Every widget you create **is** a child of it (that is what "parent class" means). |
+
+> **Never edit an asset inside the plugin from a game project.** The plugin is a git submodule: your edit would change the shared repository (or be lost at the next update). Duplicate or child it instead.
+
+---
+
+
+# Step 1 — Framework C++
+
+> **`FRAMEWORK REPO · once`** — you work inside `Plugins/CoreFramework`.
 
 ## 1.1 Target layout
 
@@ -207,7 +258,7 @@ In `Plugins/CoreFramework/CoreFramework.uplugin` add (see `Setup/CoreFramework.u
 "CanContainContent": true
 ```
 
-*Why?* Game projects that use CoreFramework then enable CommonUI automatically. `CanContainContent` lets the plugin hold the one Blueprint of Step 2.
+*Why?* Game projects that use CoreFramework then enable CommonUI automatically. `CanContainContent` lets the plugin hold the shared assets of Step 2.
 
 ## 1.5 Build and verify
 
@@ -225,26 +276,37 @@ git add Plugins/CoreFramework
 git commit -m "UI system v2: responsibility folders, BaseButton"
 ```
 
-(Publish the plugin branch after Step 2.)
+(Publish the plugin branch after Step 2, so the shared assets are included.)
 
 ---
 
-# Step 2 — Plugin base assets (plugin)
 
-## 2.1 The plugin ships exactly one Blueprint
+---
 
-`WBP_BaseRootLayout`: a widget made of **four empty layer stacks**, nothing else.
+# Step 2 — Framework Content: the shared assets
 
-*Why does this one exist?* The C++ needs a widget with four stacks that have **exact names**. If every game rebuilt it by hand, one typo would break the whole UI. It is infrastructure: it has no colors, no text, no art. Every other widget is created in the game project from the C++ parents.
+> **`FRAMEWORK REPO · once`** — you still work inside `Plugins/CoreFramework`. Everything you create here is reused by every game project, so you never rebuild it.
 
-## 2.2 Make the plugin's Content folder visible
+## 2.1 What the plugin ships
+
+Three assets, none of them designed UI:
+
+| Asset | What it is | Why it is in the plugin |
+|---|---|---|
+| `WBP_BaseRootLayout` | A widget with four **empty** layer stacks | The C++ needs four stacks with exact names; one typo breaks the UI, so it is built once. |
+| `DT_UI_Actions` | A data table of four UI actions: Confirm, Back, Next Tab, Previous Tab | Every game uses the same actions. Players and CommonUI read keys from here. |
+| `BP_CommonInputData` | A small Blueprint that says "Back = row *Back*, Click = row *Confirm*" | CommonUI needs it so that **Is Back Handler** screens know which action is "back". |
+
+They contain no colors, no text, no art. Every other widget is created in the game project.
+
+## 2.2 Make the plugin's Content folder visible and create its folders
 
 1. Open the **Content Browser**.
 2. Click **Settings** (top-right of the Content Browser, gear icon) and tick **Show Plugin Content**.
 3. In the folder tree on the left you now see **CoreFramework Content** under *Plugins* (this exists because of `"CanContainContent": true`).
-4. Right-click **CoreFramework Content** → **New Folder** → name it `UI`. Inside it create the folder `Layout`.
+4. Right-click **CoreFramework Content** → **New Folder** → name it `UI`. Inside `UI` create two folders: `Layout` and `Input`.
 
-## 2.3 Create `WBP_BaseRootLayout`
+## 2.3 Create `WBP_BaseRootLayout` (in `UI/Layout`)
 
 1. Right-click inside `CoreFramework Content/UI/Layout` → **User Interface → Widget Blueprint**.
 2. A window *Pick Parent Class for User Widget* opens. Click **All Classes** to expand the list, type `BaseRootLayoutWidget` in its search box, click it, then click **Select**.
@@ -288,95 +350,10 @@ Select each stack in the Hierarchy, then in the **Details** panel:
 
 10. Click **Compile**, then **Save**. The Compile button must show a green check.
 
-## 2.4 Final plugin Content
 
-```
-Plugins/CoreFramework/Content/
-└─ UI/
-   └─ Layout/
-      └─ WBP_BaseRootLayout
-```
+## 2.4 Create `DT_UI_Actions` (in `UI/Input`)
 
-Nothing else belongs here. If you want a fifth layer in a game, **duplicate** this asset into the game (architecture document, section 7.4) instead of editing the plugin's.
-
-## 2.5 Commit and publish
-
-```bash
-git add Plugins/CoreFramework
-git commit -m "UI system v2: WBP_BaseRootLayout"
-git subtree split --prefix=Plugins/CoreFramework -b plugin-only
-git push origin plugin-only
-```
-
-(Adapt branch and path names to your repository.)
-
----
-
-# Step 3 — Game project foundation (every game project)
-
-Everything from here on happens in the **game project**, never inside the plugin.
-
-## 3.1 Pull the plugin
-
-```bash
-git submodule add -b plugin-only https://github.com/Ry4nTR/FrameWorks.git Plugins/CoreFramework
-git submodule update --init --recursive
-```
-
-1. Right-click the `.uproject` → **Generate Visual Studio project files**, build, open the editor.
-2. *Edit → Plugins* → search `CoreFramework`: it must be enabled (CommonUI and Enhanced Input switch on automatically through the plugin's dependency list). Restart if the editor asks.
-3. If your game has C++ modules that include CoreFramework headers, add `"CoreFramework"`, `"GameplayTags"`, `"UMG"`, `"CommonUI"` to that module's `Build.cs` `PublicDependencyModuleNames`.
-
-## 3.2 Create the Content folder structure
-
-In the Content Browser: right-click → **New Folder**. Create this tree **before** creating assets, so nothing lands in the root folder.
-
-```
-Content/UI/
-├─ Config/          DA_UIConfig, DA_Settings_Tabs
-├─ Bootstrap/       BP_HUD_Gameplay, BP_HUD_MainMenu
-├─ HUD/
-│  └─ Elements/     WBP_HealthBar, WBP_ManaBar …
-├─ Menus/
-│  ├─ MainMenu/     WBP_MainMenu
-│  ├─ PauseMenu/    WBP_PauseMenu
-│  └─ Settings/     WBP_Settings
-│     └─ Tabs/      WBP_Tab_Graphics, WBP_Tab_Audio, WBP_Tab_Controls
-├─ Popups/          WBP_Popup_Confirm …
-├─ Components/
-│  ├─ Buttons/      WBP_Button_Primary, WBP_Button_Tab
-│  │  └─ Styles/    BP_ButtonStyle_Primary, BP_ButtonStyle_Tab
-│  └─ Text/         BP_TextStyle_Button …
-└─ Input/           DT_UI_Actions, BP_CommonInputData
-```
-
-| Folder | Responsibility | Parent class of its Blueprints |
-|---|---|---|
-| `Config` | Data assets that tell the framework what exists | (data assets) |
-| `Bootstrap` | Actors that start the UI per map type | `BaseHUD` |
-| `HUD` / `HUD/Elements` | The gameplay HUD and the pieces shown in it | `BaseHUDWidget` / `BaseUserWidget` |
-| `Menus/<Name>` | One folder per menu, with its tab pages in `Tabs` | `BaseMenuWidget` / `BaseTabWidget` |
-| `Popups` | Dialogs and modal screens | `BaseActivatableWidget` |
-| `Components` | Reusable building blocks (buttons, text styles) | `BaseButton`, style classes |
-| `Input` | CommonUI input actions and input data | (data table, input data) |
-
-*Why this split? One folder = one responsibility. When you look for "the pause menu" or "the style of my buttons", there is exactly one place to look. Adding a menu later means adding one folder, not searching a pile of 60 widgets.*
-
-## 3.3 CommonUI prerequisites (once per project)
-
-CommonUI does the input routing: which screen receives the keyboard, what Escape / gamepad B does, how focus moves. It needs three things from your project.
-
-### A. The Game Viewport Client
-
-1. *Edit → Project Settings*. In the search box type `viewport client`.
-2. Set **Game Viewport Client Class** to **CommonGameViewportClient**.
-3. Restart the editor when asked.
-
-*Why: this class is the entry point through which CommonUI sees every input event before the game does. Without it screens open, but Back, tab shortcuts and device switching do nothing.*
-
-### B. The UI actions table `DT_UI_Actions`
-
-1. In `Content/UI/Input` right-click → **Miscellaneous → Data Table**.
+1. In `CoreFramework Content/UI/Input` right-click → **Miscellaneous → Data Table**.
 2. In *Pick Row Structure* choose **CommonInputActionDataBase**, click **OK**, name it `DT_UI_Actions`, open it.
 3. In the toolbar click **Add** four times. For each row select it in the table, type the **Row Name** in the Row Name field, then edit the **Row Editor** panel (bottom / right side of the Data Table editor):
 
@@ -389,17 +366,133 @@ CommonUI does the input routing: which screen receives the keyboard, what Escape
 
    In a **Key** field you can click the small keyboard icon and press the key instead of searching.
 
-*Why a table: UI actions are data, not code. Players (and you) can change keys later without touching Blueprints, and CommonUI uses the same rows to show the right button glyph for keyboard or gamepad.*
+4. Save.
 
-### C. The input data `BP_CommonInputData`
+*Why a table: UI actions are data, not code. You (or a game) can change keys later without touching Blueprints, and CommonUI uses the same rows to show the right button glyph for keyboard or gamepad.*
 
-1. In `Content/UI/Input` right-click → **Blueprint Class** → expand **All Classes** → search `CommonUIInputData` → **Select**. Name it `BP_CommonInputData` and open it.
-2. In its defaults set **Default Click Action**: Data Table = `DT_UI_Actions`, Row Name = `Confirm`. Set **Default Back Action**: Data Table = `DT_UI_Actions`, Row Name = `Back`. Save.
-3. *Edit → Project Settings*, search `Common Input`. In **Common Input Settings** set **Input Data** to `BP_CommonInputData`.
+## 2.5 Create `BP_CommonInputData` (in `UI/Input`)
 
-*Why: when a screen has "Is Back Handler" ticked, CommonUI needs to know which action means "back". This is where you tell it.*
+1. In `CoreFramework Content/UI/Input` right-click → **Blueprint Class** → expand **All Classes** → search `CommonUIInputData` → **Select**. Name it `BP_CommonInputData` and open it.
+2. In its defaults set **Default Click Action**: Data Table = `DT_UI_Actions`, Row Name = `Confirm`. Set **Default Back Action**: Data Table = `DT_UI_Actions`, Row Name = `Back`.
+3. Compile, Save.
+
+*Why: when a screen has "Is Back Handler" ticked, CommonUI must know which action means "back". This Blueprint is where that is declared. It is only **assigned** in each game's Project Settings (Step 3.2); the asset itself is shared.*
+
+## 2.6 Final plugin Content
+
+```
+Plugins/CoreFramework/Content/
+└─ UI/
+   ├─ Layout/
+   │  └─ WBP_BaseRootLayout
+   └─ Input/
+      ├─ DT_UI_Actions
+      └─ BP_CommonInputData
+```
+
+Nothing else belongs here. Buttons, styles, menus and HUDs are created in each game project (Step 3 and 4).
+
+## 2.7 Commit and publish
+
+```bash
+git add Plugins/CoreFramework
+git commit -m "UI system: shared content (root layout, UI actions, input data)"
+git subtree split --prefix=Plugins/CoreFramework -b plugin-only
+git push origin plugin-only
+```
+
+(Adapt branch and path names to your repository. If your repository tracks `.uasset` files with Git LFS, make sure `*.uasset` and `*.umap` are tracked before committing.)
+
+From now on **every game project that pulls `plugin-only` has these three assets ready.**
+
+---
+
+---
+
+# Step 3 — Game project setup
+
+> **`GAME PROJECT · once per project`** — you work in the game project, never inside the plugin. This is the one-time setup of each new game. Then you only do Step 4 and 5 for each screen.
+
+## 3.1 Pull the plugin
+
+```bash
+git submodule add -b plugin-only https://github.com/Ry4nTR/FrameWorks.git Plugins/CoreFramework
+git submodule update --init --recursive
+```
+
+1. Right-click the `.uproject` → **Generate Visual Studio project files**, build, open the editor.
+2. *Edit → Plugins* → search `CoreFramework`: it must be enabled (CommonUI and Enhanced Input switch on automatically through the plugin's dependency list). Restart if the editor asks.
+3. In the Content Browser tick **Settings → Show Plugin Content** and check that **CoreFramework Content/UI/Input** shows `DT_UI_Actions` and `BP_CommonInputData`. They came with the plugin: you do **not** create them.
+4. If your game has C++ modules that include CoreFramework headers, add `"CoreFramework"`, `"GameplayTags"`, `"UMG"`, `"CommonUI"` to that module's `Build.cs` `PublicDependencyModuleNames`.
+
+## 3.2 Two CommonUI project settings
+
+CommonUI needs two settings that live in the **game project** (see W.3). Both point to things that already exist.
+
+### A. The Game Viewport Client
+
+1. *Edit → Project Settings*. In the search box type `viewport client`.
+2. Set **Game Viewport Client Class** to **CommonGameViewportClient**.
+3. Restart the editor when asked.
+
+*Why: this class is the entry point through which CommonUI sees every input event before the game does. Without it screens open, but Back, tab shortcuts and device switching do nothing.*
+
+### B. The Common Input data
+
+1. *Edit → Project Settings*, search `Common Input`.
+2. In **Common Input Settings** set **Input Data** to **`BP_CommonInputData`** (pick the one from *CoreFramework Content*, or your own child, see W.4).
+
+*Why: this is the link between CommonUI and the Back / Confirm actions the plugin ships. Without it, "Is Back Handler" has no action to listen to.*
 
 You can leave **Enable Enhanced Input Support** and the *Platform Input* lists as they are for now (Step 6 explains them).
+
+## 3.3 Create the Content folder structure and understand each folder
+
+In the Content Browser: right-click → **New Folder**. Create this tree **before** creating assets, so nothing lands in the root folder.
+
+```
+Content/UI/
+├─ Config/          DA_UIConfig, DA_Settings_Tabs
+├─ Startup/         BP_Startup_MainMenu, BP_Startup_Gameplay
+├─ HUD/
+│  └─ Elements/     WBP_HealthBar, WBP_ManaBar …
+├─ Menus/
+│  ├─ MainMenu/     WBP_MainMenu
+│  ├─ PauseMenu/    WBP_PauseMenu
+│  └─ Settings/     WBP_Settings
+│     └─ Tabs/      WBP_Tab_Graphics, WBP_Tab_Audio, WBP_Tab_Controls
+├─ Popups/          WBP_Popup_Confirm …
+└─ Components/
+   ├─ Buttons/      WBP_Button_Primary, WBP_Button_Tab
+   │  └─ Styles/    BP_ButtonStyle_Primary, BP_ButtonStyle_Tab
+   └─ Text/         BP_TextStyle_Button …
+```
+
+There is **no** `Input` folder: the input assets come from the plugin. Create `Content/UI/Input/` only if you customize them (W.4).
+
+What each folder is for:
+
+| Folder | What goes inside | When you create things here | Parent class | Examples |
+|---|---|---|---|---|
+| `Config/` | **Data only**, no layout: the list of your screens and HUD elements (`DA_UIConfig`), and one list of tabs per tabbed menu (`DA_Settings_Tabs`). | `DA_UIConfig` once per project (3.6). A tab list each time you add a tabbed menu (4.4). | `UIConfigDataAsset`, `UITabSetDataAsset` | `DA_UIConfig`, `DA_Settings_Tabs` |
+| `Startup/` | Tiny **invisible actors** whose only job is to say *which screens open when a map starts*. One per kind of map. Explained below. | Once per project (3.7); again only if you add a new kind of map. | `BaseHUD` | `BP_Startup_MainMenu`, `BP_Startup_Gameplay` |
+| `HUD/` | The gameplay HUD widget: what the player sees during play. | Once (4.1). | `BaseHUDWidget` | `WBP_HUD` |
+| `HUD/Elements/` | One small widget per thing shown **inside** the HUD (health bar, minimap…). | Each time you add an HUD element (Step 5). | `BaseUserWidget` (or your own C++ child) | `WBP_HealthBar` |
+| `Menus/<Name>/` | One folder per menu, containing that menu's widget. | Each time you add a menu (4.2–4.4). | `BaseMenuWidget` | `WBP_MainMenu` |
+| `Menus/Settings/Tabs/` | One widget per tab page of the settings menu. | Each time you add a settings category. | `BaseTabWidget` | `WBP_Tab_Graphics` |
+| `Popups/` | Dialogs and other screens that appear **over** a menu. | Each time you add a popup (4.5). | `BaseActivatableWidget` | `WBP_Popup_Confirm` |
+| `Components/Buttons/` | The reusable buttons everything else uses. | Once per project (3.5). | `BaseButton` | `WBP_Button_Primary` |
+| `Components/Buttons/Styles/` | The look of those buttons (colors for normal, hovered, pressed, selected). | Once per project (3.5). | `CommonButtonStyle` | `BP_ButtonStyle_Primary` |
+| `Components/Text/` | The look of texts (font, size, color). | Once per project (3.5). | `CommonTextStyle` | `BP_TextStyle_Button` |
+
+*Why this split: one folder = one responsibility. When you look for "the pause menu" or "the look of my buttons", there is exactly one place to look.*
+
+> **What is a Startup actor?**
+> * In Unreal every player who sees a screen has an invisible helper actor called a **HUD actor** (the C++ class `AHUD`). It has an old, confusing name: it is **not** the on-screen HUD (`WBP_HUD`) and it draws nothing.
+> * The framework needs a signal "a player exists on this machine, start the UI now". That HUD actor is created at exactly that moment, and never on a dedicated server, so it is the right place for the signal.
+> * Our `BaseHUD` class uses it for that. You create a Blueprint child of `BaseHUD` and give it **one setting**: **Startup Screens**, the list of screens to open when the map starts.
+> * You make **one per kind of map**: `BP_Startup_MainMenu` opens the main menu, `BP_Startup_Gameplay` opens the HUD. A Game Mode then says which one the map uses (3.7).
+> * That is all they do. You create them once per project and rarely touch them again. We call the folder **Startup** because that is exactly what it decides.
 
 ## 3.4 Gameplay tags: the ids of your screens
 
@@ -421,7 +514,7 @@ You can leave **Enable Enhanced Input Support** and the *Platform Input* lists a
 
 ## 3.5 Reusable building blocks: text style, button style, buttons
 
-Create these once; every menu reuses them.
+These live in **your game project** (`Content/UI/Components/`) so they are easy to reach and your look stays yours. Create them once per project; every menu, popup and tab reuses them.
 
 ### Text style `BP_TextStyle_Button`
 
@@ -468,32 +561,39 @@ Create these once; every menu reuses them.
 
 ## 3.6 The config asset `DA_UIConfig`
 
+`DA_UIConfig` is the list of **your** screens and HUD elements. The plugin cannot ship it, because it points at widgets that only exist in your game.
+
 1. In `Content/UI/Config` right-click → **Miscellaneous → Data Asset**. In *Pick Data Asset Class* choose **UIConfigDataAsset**. Name it `DA_UIConfig`, open it.
-2. Set **Root Layout Class** to **WBP_BaseRootLayout** (the dropdown lists the plugin's asset because *Show Plugin Content* is on). Leave **Screens** and **HUD Elements** empty for now.
-3. *Edit → Project Settings* → search `CoreFramework UI`. Set **Default UI Config** to `DA_UIConfig`.
+2. Set **Root Layout Class** to **WBP_BaseRootLayout** (the dropdown lists the plugin's asset because *Show Plugin Content* is on). Leave **Screens** and **HUD Elements** empty for now; you fill them in Steps 4 and 5.
+3. *Edit → Project Settings* → search `CoreFramework UI`. Set **Default UI Config** to `DA_UIConfig`. (This is the third project setting of W.3.)
 
 *Why: the framework needs to know where your UI definition is. This setting is the single link between the plugin and your game's UI.*
 
-## 3.7 HUD actors and Game Modes (this starts the UI)
+## 3.7 Startup actors and Game Modes (this starts the UI)
 
-The framework starts the UI from a **HUD actor**. A HUD actor exists only for players who actually see a screen (never on a dedicated server), which makes it the safe starting point in multiplayer.
+If you have not read the box **"What is a Startup actor?"** in 3.3, read it first.
 
-1. In `Content/UI/Bootstrap` right-click → **Blueprint Class** → **All Classes** → `BaseHUD` → **Select**. Name it `BP_HUD_Gameplay`.
-2. Open it → **Class Defaults** → search `Startup Screens`. Click **+**, choose `UI.Screen.HUD`.
-3. Repeat to create `BP_HUD_MainMenu` with **Startup Screens = [`UI.Screen.MainMenu`]**.
+1. In `Content/UI/Startup` right-click → **Blueprint Class** → **All Classes** → `BaseHUD` → **Select**. Name it `BP_Startup_Gameplay`.
+2. Open it → **Class Defaults** (Graph → Class Defaults) → search `Startup Screens`. Click **+**, choose `UI.Screen.HUD`.
+3. Repeat to create `BP_Startup_MainMenu` with **Startup Screens = [`UI.Screen.MainMenu`]**.
 4. Create the Game Modes (in a `Content/Game/GameModes` folder, or wherever your project keeps them):
-   * `BP_GameMode_Gameplay` (parent *Game Mode Base*) → Class Defaults → **HUD Class** = `BP_HUD_Gameplay`.
-   * `BP_GameMode_MainMenu` → **HUD Class** = `BP_HUD_MainMenu`, **Default Pawn Class** = *None* (a menu map needs no character).
+   * `BP_GameMode_Gameplay` (parent *Game Mode Base*) → Class Defaults → **HUD Class** = `BP_Startup_Gameplay`.
+   * `BP_GameMode_MainMenu` → **HUD Class** = `BP_Startup_MainMenu`, **Default Pawn Class** = *None* (a menu map needs no character).
+   *Why "HUD Class": that is the name Unreal gives the slot where a Game Mode names the HUD actor. Our startup actor is a HUD actor, so it goes there.*
 5. In each map: *Window → World Settings* → **GameMode Override** = the matching Game Mode.
 6. *Project Settings → Maps & Modes*: set the default map to your main menu map.
 
-*Why separate HUD classes: the **Startup Screens** list is "what opens when this map starts". The main menu map opens the main menu, the gameplay map opens the HUD.*
+*Why separate startup actors: the **Startup Screens** list is "what opens when this map starts". The main menu map opens the main menu, the gameplay map opens the HUD.*
 
 *If you list several startup screens, put the HUD first: the most recently opened screen decides the input mode.*
 
 ---
 
+---
+
 # Step 4 — Build your game's UI from the base parents
+
+> **`GAME PROJECT · per screen`** — you create one Widget Blueprint per screen, in the folder named in 3.3.
 
 The layouts below are **examples to teach the mechanics**. Your game will look different. What matters is the parent class, the named widgets and the settings, not the colors or positions.
 
@@ -570,7 +670,7 @@ The layouts below are **examples to teach the mechanics**. Your game will look d
    * **Settings → On Clicked →** Get UI Frame Subsystem → **Push Screen** (`UI.Screen.Settings`).
    * **Quit to Menu → On Clicked →** **Open Level (by Name)** with your main menu map.
 4. **Class Defaults**:
-   * **Is Back Handler** = **on**. *Why: Escape / gamepad B now closes the pause menu with no extra Blueprint logic (this uses the Back action from Step 3.3).*
+   * **Is Back Handler** = **on**. *Why: Escape / gamepad B now closes the pause menu with no extra Blueprint logic (this uses the Back action shipped in the plugin, Step 2.5, and assigned in Step 3.2).*
    * Search `Pause`: **Pause Game While Active** = **on**. *Why: the game stops while the menu is open and resumes when it closes (single player and listen-server host).*
 5. Compile, Save.
 
@@ -627,7 +727,7 @@ This is the most complex example; each part has one job.
    * Select `TabSwitcher` → Details → **Slot (Vertical Box Slot) → Size** = **Fill**.
      *Why: the tab pages are shown inside the switcher; Fill gives it all the remaining height. The switcher shows one page at a time.*
 3. Select `TabList`. In Details search `Tab Input`:
-   * **Next Tab Input Action Data**: Data Table = `DT_UI_Actions`, Row Name = `NextTab`.
+   * **Next Tab Input Action Data**: Data Table = `DT_UI_Actions` (it comes from *CoreFramework Content/UI/Input*), Row Name = `NextTab`.
    * **Previous Tab Input Action Data**: Data Table = `DT_UI_Actions`, Row Name = `PreviousTab`.
    * Tick **Auto Listen For Input**.
    *Why: this gives you tab switching with the gamepad shoulder buttons and with `Q` / `E` for free.*
@@ -717,7 +817,12 @@ If something fails, go to **Step 6.5 Troubleshooting** and check the **Output Lo
 
 ---
 
+
+---
+
 # Step 5 — Bind gameplay data (HP / Mana example)
+
+> **`GAME PROJECT · per gameplay element`** — one widget (and one game component) per thing you want to show.
 
 **Goal:** a health bar that follows the local player's current pawn through spawn, death, respawn and possession changes. Everything below lives in the **game project**; nothing is added to the plugin.
 
@@ -993,10 +1098,10 @@ Always start with *Window → Output Log*, filter `LogCoreUI`.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Nothing appears | No Default UI Config, no Root Layout Class, or the Game Mode has no HUD class | Step 3.6 and 3.7 |
+| Nothing appears | No Default UI Config, no Root Layout Class, or the Game Mode has no HUD class | Steps 3.2, 3.6 and 3.7 |
 | `no screen registered for tag` | Row missing in `DA_UIConfig → Screens`, or tag typo | Step 4.6 |
 | `layer … is not registered` | Stack name typo in the root layout, or the Layer Tag is empty / wrong | Step 2.3 (exact names); Layer Tag in 4.6 |
-| Back / Escape does nothing | **Is Back Handler** off, or no Default Back Action | Step 3.3 (C), Class Defaults |
+| Back / Escape does nothing | **Is Back Handler** off, or no Default Back Action | Steps 2.5 and 3.2 (B), Class Defaults |
 | Gamepad cannot move focus | Nothing focusable, or no focus target | Use `WBP_Button_*` (focusable), name one widget `DefaultFocusWidget` |
 | Mouse blocked by the HUD | A stack is **Visible** | Step 2.3, point 8 |
 | Tab bar empty | `Tab Button Class` unset, `Default Tab Set` empty, or a tab page is not a `BaseTabWidget` | Step 4.4 (C), check `LogCoreUI` |
@@ -1005,24 +1110,31 @@ Always start with *Window → Output Log*, filter `LogCoreUI`.
 | My own tags are missing in the tag pickers | You are on the first version that filtered tags | Update the plugin (this version removed the filters) |
 | Widget does not rebind after respawn | Missing unsubscription in `Unbound`, or **Auto Register As Binder** off | Section 5.2 pattern |
 | Input stays blocked after closing a screen | A screen was destroyed without deactivating | Use **Close Screen**; the framework also releases suppression when a screen is destroyed |
-| `WBP_BaseRootLayout` is not in the picker | **Show Plugin Content** is off | Step 2.2 |
+| `WBP_BaseRootLayout` is not in the picker | **Show Plugin Content** is off | Step 2.2 (plugin) / 3.1 (game) |
+
+---
 
 ---
 
 # Final checklist
 
-**Plugin (once)**
+**FRAMEWORK REPO (once)**
 - [ ] `UISystem` subfolders in place, plugin builds (Step 1)
-- [ ] `WBP_BaseRootLayout` created with 4 correctly named stacks, compiled, committed (Step 2)
+- [ ] `WBP_BaseRootLayout` created with 4 correctly named stacks (2.3)
+- [ ] `DT_UI_Actions` with Confirm / Back / NextTab / PreviousTab (2.4)
+- [ ] `BP_CommonInputData` pointing at those rows (2.5)
+- [ ] Committed and `plugin-only` published (2.7)
 
-**Game project**
-- [ ] Plugin pulled, enabled, game builds (3.1)
-- [ ] Content folder structure created (3.2)
-- [ ] Game Viewport Client, `DT_UI_Actions`, `BP_CommonInputData`, Common Input Settings done (3.3)
+**GAME PROJECT (once per project)**
+- [ ] Plugin pulled, enabled, game builds; plugin assets visible with *Show Plugin Content* (3.1)
+- [ ] Game Viewport Client = `CommonGameViewportClient`; Common Input Settings → Input Data = `BP_CommonInputData` (3.2)
+- [ ] Content folder structure created (3.3)
 - [ ] Gameplay tags created (3.4)
 - [ ] Text style, button styles, `WBP_Button_Primary`, `WBP_Button_Tab` created (3.5)
-- [ ] `DA_UIConfig` assigned in Project Settings (3.6)
-- [ ] `BP_HUD_Gameplay`, `BP_HUD_MainMenu`, Game Modes, maps set (3.7)
+- [ ] `DA_UIConfig` created and assigned in Project Settings (3.6)
+- [ ] `BP_Startup_Gameplay`, `BP_Startup_MainMenu`, Game Modes, maps set (3.7)
+
+**GAME PROJECT (per screen)**
 - [ ] `WBP_HUD`, `WBP_MainMenu`, `WBP_PauseMenu`, `WBP_Settings` + tabs, `WBP_Popup_Confirm` built (4.1–4.5)
 - [ ] All screens listed in `DA_UIConfig` (4.6)
 - [ ] Smoke test passes (4.8)

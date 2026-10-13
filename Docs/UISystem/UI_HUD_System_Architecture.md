@@ -5,7 +5,7 @@
 **Engine target:** Unreal Engine 5.5 – 5.8
 **Companion:** `UI_HUD_Setup_Guide.md` (beginner friendly, step by step)
 
-> **What v2 changes.** The framework is now strictly **infrastructure**. It ships C++ base classes and exactly **one** Blueprint asset (the root layout with its four layer stacks). It ships no menus, no HUD layout, no styles, no art. Every screen of a game is built **in the game project** from the base parents. The C++ is organised in responsibility folders. Section 10 lists the audit results and every change.
+> **What v2 changes (v3 of the setup guide moves the shared CommonUI assets into the plugin; no C++ changed).** The framework is now strictly **infrastructure**. It ships C++ base classes and three shared **assets** that are identical in every game: the root layout with its four empty layer stacks, the CommonUI UI-actions table and the CommonUI input data Blueprint. It ships no menus, no HUD layout, no styles, no art. Every screen of a game is built **in the game project** from the base parents. The C++ is organised in responsibility folders. Section 10 lists the audit results and every change.
 >
 > **Verification status.** Written against the CommonUI / Enhanced Input / GameplayTags APIs of UE 5.5–5.8 and checked by careful review, but **not compiled** by its author (no engine available there). Appendix A lists every engine API the system touches with the one-line fix if a signature differs in your engine version.
 
@@ -42,9 +42,9 @@
 │ Manager / binding                UUIFrameSubsystem  UUIBindingHub       │   │ WBP_Tab_*          parent  UBaseTabWidget                     │
 │                                  IBaseUIBinderInterface                 │   │ WBP_Button_*       parent  UBaseButton                        │
 │ Data asset CLASSES               UUIConfigDataAsset  UUITabSetDataAsset │   │ WBP_Popup_*        parent  UBaseActivatableWidget             │
-│ Native ids                       CoreFramework.UI.Layer.*  HUDSlot.Default│  │ BP_HUD_*           parent  ABaseHUD                           │
+│ Native ids                       CoreFramework.UI.Layer.*  HUDSlot.Default│  │ BP_Startup_*       parent  ABaseHUD                           │
 │                                                                         │   │ DA_UIConfig, DA_Settings_Tabs   (instances of the data assets)│
-│ Content: ONE Blueprint ──► WBP_BaseRootLayout (4 empty layer stacks)    │   │ Gameplay tags, styles, fonts, textures, animations, input data│
+│ Content: WBP_BaseRootLayout, DT_UI_Actions, BP_CommonInputData          │   │ Gameplay tags, styles, fonts, textures, animations            │
 └─────────────────────────────────────────────────────────────────────────┘   └───────────────────────────────────────────────────────────────┘
         no art, no menus, no layout                  ──── inherits / references ────►        everything the player sees
 ```
@@ -56,7 +56,7 @@ The dependency only goes one way: the game depends on the plugin; the plugin nev
 | Component | Class | Folder | Responsibility |
 |---|---|---|---|
 | Manager | `UUIFrameSubsystem` (`ULocalPlayerSubsystem`) | `Manager/` | Owns the root layout, pushes/pops screens by tag, async loads, holds the registries, owns the binding hub. |
-| Bootstrap | `ABaseHUD` (`AHUD`) | `HUD/` | Starts/stops the subsystem for its local controller. Draws nothing. |
+| Startup actor | `ABaseHUD` (`AHUD`) | `HUD/` | Starts/stops the subsystem for its local controller. Draws nothing. |
 | Root | `UBaseRootLayoutWidget` | `Layout/` | One per local player. Holds one `UCommonActivatableWidgetStack` per layer. |
 | Screen base | `UBaseActivatableWidget` | `Foundation/` | Anything pushed on a layer. Declares input mode, focus, side effects. |
 | Plain widget base | `UBaseUserWidget` | `Foundation/` | HUD elements, list entries. Show/Hide hook, binding, input helpers. |
@@ -74,6 +74,8 @@ The dependency only goes one way: the game depends on the plugin; the plugin nev
 |---|---|---|
 | Behavior (stacks, loading, input config, focus, binding, tab building) | Framework | C++ in the plugin |
 | Layer structure (four stacks) | Framework | `WBP_BaseRootLayout` (plugin Content) |
+| UI actions (Confirm / Back / Next Tab / Previous Tab) and the input data CommonUI reads | Framework | `DT_UI_Actions`, `BP_CommonInputData` (plugin Content) |
+| Which screens a map opens when it starts | Game | Startup actors `BP_Startup_*` (parent `ABaseHUD`) |
 | Which screen exists, which class, which layer | Game | `DA_UIConfig` |
 | Screen ids, project layers, project slots | Game | Gameplay tags in the game project |
 | Layout, art, fonts, styles, animations, texts | Game | Game Content |
@@ -116,7 +118,7 @@ UCommonUserWidget
  │   └─ UBaseTabWidget ······ tab page (HasPendingChanges / ApplyChanges / RevertChanges)
  │        └─ WBP_Tab_*            (GAME)
  └─ UBaseRootLayoutWidget ·· layer stacks
-      └─ WBP_BaseRootLayout       (PLUGIN Content: the only shipped Blueprint)
+      └─ WBP_BaseRootLayout       (PLUGIN Content: shared asset)
 
 UCommonActivatableWidget
  └─ UBaseActivatableWidget · [IBaseUIBinderInterface]  input mode, focus, pause/suppress, anim hook
@@ -132,7 +134,7 @@ UCommonButtonBase
 
 UPrimaryDataAsset ─ UUIConfigDataAsset, UUITabSetDataAsset  ─►  DA_UIConfig, DA_Settings_Tabs   (GAME instances)
 UDeveloperSettings ─ UUIFrameSettings
-AHUD               ─ ABaseHUD ─► BP_HUD_Gameplay, BP_HUD_MainMenu                                (GAME)
+AHUD               ─ ABaseHUD ─► BP_Startup_Gameplay, BP_Startup_MainMenu                           (GAME)
 ULocalPlayerSubsystem ─ UUIFrameSubsystem
 UObject            ─ UUIBindingHub   (owned by the subsystem)
 ```
@@ -141,12 +143,15 @@ UObject            ─ UUIBindingHub   (owned by the subsystem)
 
 ```
 Plugins/CoreFramework/Content/UI/
-└─ Layout/
-   └─ WBP_BaseRootLayout            ← the ONLY Blueprint of the plugin (4 named, empty stacks)
+├─ Layout/
+│  └─ WBP_BaseRootLayout            ← 4 named, empty stacks
+└─ Input/
+   ├─ DT_UI_Actions                 ← Confirm / Back / NextTab / PreviousTab
+   └─ BP_CommonInputData            ← "back" and "click" actions for CommonUI
 
 <GameProject>/Content/UI/           ← everything below is the game's
 ├─ Config/       DA_UIConfig, DA_Settings_Tabs
-├─ Bootstrap/    BP_HUD_Gameplay, BP_HUD_MainMenu         (parents: ABaseHUD)
+├─ Startup/      BP_Startup_MainMenu, BP_Startup_Gameplay (parent: ABaseHUD; which screens a map opens)
 ├─ HUD/          WBP_HUD                                  (parent: UBaseHUDWidget)
 │  └─ Elements/  WBP_HealthBar, WBP_ManaBar …             (parent: UBaseUserWidget / game C++ child)
 ├─ Menus/
@@ -155,11 +160,10 @@ Plugins/CoreFramework/Content/UI/
 │  └─ Settings/  WBP_Settings                             (parent: UBaseMenuWidget)
 │     └─ Tabs/   WBP_Tab_Graphics, WBP_Tab_Audio …        (parent: UBaseTabWidget)
 ├─ Popups/       WBP_Popup_Confirm …                      (parent: UBaseActivatableWidget)
-├─ Components/
-│  ├─ Buttons/   WBP_Button_Primary, WBP_Button_Tab       (parent: UBaseButton)
-│  │  └─ Styles/ BP_ButtonStyle_*                         (CommonButtonStyle)
-│  └─ Text/      BP_TextStyle_*                           (CommonTextStyle)
-└─ Input/        DT_UI_Actions, BP_CommonInputData
+└─ Components/
+   ├─ Buttons/   WBP_Button_Primary, WBP_Button_Tab       (parent: UBaseButton)
+   │  └─ Styles/ BP_ButtonStyle_*                         (CommonButtonStyle)
+   └─ Text/      BP_TextStyle_*                           (CommonTextStyle)
 ```
 
 ### 3.4 Runtime ownership and lifetime
@@ -189,7 +193,7 @@ APlayerController
 ### 3.5 Start-up sequence
 
 ```
-GameMode.HUDClass = BP_HUD_Gameplay  (child of ABaseHUD, StartupScreens = [UI.Screen.HUD])
+GameMode.HUDClass = BP_Startup_Gameplay  (child of ABaseHUD, StartupScreens = [UI.Screen.HUD])
         │
  local PlayerController spawns its HUD
         │
@@ -1420,7 +1424,7 @@ Tab pages have their own optional `DefaultFocusWidget` and `bFocusContentOnSelec
 
 | Need | How |
 |---|---|
-| Escape / gamepad B closes the screen | Tick **Is Back Handler** in the screen Blueprint's class defaults. Needs the default back action in the CommonUI input data (guide, Step 3.3). |
+| Escape / gamepad B closes the screen | Tick **Is Back Handler** in the screen Blueprint's class defaults. Needs the default back action in the CommonUI input data (guide, Steps 2.5 and 3.2). |
 | Popup blocks everything below | Tick **Is Modal**; push on the **Modal** layer. |
 | Pause the game while open | `bPauseGameWhileActive` (single player / listen-server host). |
 | Stop camera / movement while a live overlay is open | `bIgnoreLookInputWhileActive`, `bIgnoreMoveInputWhileActive`. Applied once per activation and always released. |
@@ -1551,7 +1555,8 @@ Any visual design, any screen, HP / mana / ammo widgets, inventory, quest tracke
 
 | Location | Assets |
 |---|---|
-| Plugin `Content/UI/Layout/` | `WBP_BaseRootLayout` — **the only one** |
+| Plugin `Content/UI/Layout/` | `WBP_BaseRootLayout` |
+| Plugin `Content/UI/Input/` | `DT_UI_Actions`, `BP_CommonInputData` |
 | Game `Content/UI/...` | everything else (Section 3.3) |
 
 ---
@@ -1571,7 +1576,7 @@ Any visual design, any screen, HP / mana / ammo widgets, inventory, quest tracke
 | `UBaseMenuWidget` | **Keep** | Data-driven tab building cannot be done in Blueprint cleanly. Tabs are optional, menus without tabs work. |
 | `UBaseTabWidget` | **Keep** | Tab page parent (selected/deselected events, Apply/Revert contract). |
 | `UBaseButton` | **New, replaces `UBaseTabButton`** | One parent for all buttons incl. tabs; fixes the "how do I give this button its own text" problem. |
-| `ABaseHUD`, `UUIFrameSettings`, data asset classes | **Keep** | Bootstrap, settings, data-driven config. |
+| `ABaseHUD`, `UUIFrameSettings`, data asset classes | **Keep** | Startup actor, settings, data-driven config. |
 
 **Answer to "keep all base classes?"** Yes. Every class has a distinct responsibility and none contains a layout. The 15 headers / 11 sources count is unchanged: `BaseButton` replaced `BaseTabButton`.
 
@@ -1585,7 +1590,8 @@ Any visual design, any screen, HP / mana / ammo widgets, inventory, quest tracke
 | 4 | `UBaseTabButton` → `UBaseButton` (`ButtonLabel`, `LabelText`, `SetButtonLabel`) | See table above. |
 | 5 | One shared `FBaseUIActionDelegate` (in `UITypes.h`) instead of one per widget base | Duplicate declaration. |
 | 6 | Folder reorganisation | Responsibility folders (3.1). |
-| 7 | Blueprint content: only `WBP_BaseRootLayout` in the plugin | Menus / HUD / settings Blueprints moved to the game (guide, Steps 3–5). |
+| 7 | Blueprint content: the plugin ships `WBP_BaseRootLayout` plus the two CommonUI input assets (`DT_UI_Actions`, `BP_CommonInputData`) and nothing visual | Menus / HUD / settings Blueprints live in the game (guide, Steps 3–5). The Back / Confirm / Tab actions are identical in every game, so they are created once in the framework repo instead of in each project. |
+| 8 | Setup guide v3: the `Bootstrap` folder is called `Startup` and explained; the reusable buttons and styles are game-project assets (`Content/UI/Components/`) | Documentation only. |
 
 ### 10.3 Considered and kept
 

@@ -4,6 +4,10 @@ Step-by-step editor setup for `ABaseCharacter`. Follow the steps in order. The A
 
 Prerequisites: the four framework folders and `FrameWorks.Build.cs` (with `EnhancedInput` and `GameplayTags`) are in the project, and it compiles.
 
+> **Game projects.** This document sets up the framework character itself (`BP_BaseCharacter`). In a game project, create the character Blueprint from the project's own class (`A<Project>Character : ABaseCharacter`), not from `BaseCharacter`, and set the same Class Defaults on it. See `Docs/Integration/Project_Integration_Guide.md`, sections 2.1 and 5.1.
+
+> **Documentation status.** Step 6 still lists the components `FirstPersonCamera`, `ThirdPersonSpringArm` and `ThirdPersonCamera` and the Class Default *First Person Camera Socket Name*. The current character has none of them: the camera rig is created at runtime by its `CameraManager` component, and the head socket is set on the `FirstPerson` camera profile (`AttachSocketName`). For the cameras in Step 6, use `CameraManagerComponent.h` until the step is rewritten. The other steps were not re-checked against the code in this update.
+
 ---
 
 ## Step 1 - Check project input settings
@@ -128,6 +132,8 @@ Leave an action empty to remove that feature from the game. For a ground-only ga
 1. Create or open a Game Mode Blueprint. Set **Default Pawn Class** to `BP_BaseCharacter`.
 2. In *World Settings*, set **GameMode Override** to it.
 3. Make sure a **Player Start** exists.
+
+In a game project, the GameMode is the project's own (a Blueprint child of `A<Project>GameplayGameMode`) with the character Blueprint as `Default Pawn Class`; see `Docs/Integration/Project_Integration_Guide.md`, section 2.2.
 
 ## Step 8 - Test single player
 

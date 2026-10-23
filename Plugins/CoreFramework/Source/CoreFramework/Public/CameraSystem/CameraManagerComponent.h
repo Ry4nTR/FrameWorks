@@ -77,12 +77,32 @@ struct COREFRAMEWORK_API FCameraProfile
 	bool bFirstPerson = false;
 
 	/**
-	 * Socket the rig attaches to while this profile is active (for example a head socket for first person).
-	 * Needs a socket parent set through UCameraManagerComponent::SetSocketParent. None attaches to the owner's root.
+	 * Socket the rig attaches to while this profile is active (for example a head socket for a visible body).
+	 * Needs a socket parent set through UCameraManagerComponent::SetSocketParent. None attaches at the origin of the
+	 * attach component, or to the owner's root when bAttachToSocketParent is off. A socket that does not exist on the
+	 * socket parent is ignored with a warning, so a missing bone never moves the camera to the floor.
 	 * Switching between profiles with different attach points is always an instant cut.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Behavior")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attachment")
 	FName AttachSocketName = NAME_None;
+
+	/**
+	 * When true the rig attaches to the component set through UCameraManagerComponent::SetSocketParent (at
+	 * AttachSocketName when that is set and exists, otherwise at the component origin). When false the rig attaches
+	 * to the owner's root component, the capsule of a character. A profile that names a socket always attaches to the
+	 * socket parent. A first-person profile uses this to hang the camera on a scene component that sits relative to
+	 * the capsule, with no mesh and no socket.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attachment")
+	bool bAttachToSocketParent = false;
+
+	/**
+	 * Offset of the rig origin in the local space of the attach point: the owner's root, the attach component or the
+	 * socket. This is how a camera is placed relative to the capsule (for example 64 on Z for the eye height).
+	 * Blends between profiles that share the same attach point.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Attachment")
+	FVector AttachOffset = FVector::ZeroVector;
 };
 
 /** The values the component interpolates on the owned rig. Internal, not reflected. */
@@ -92,6 +112,7 @@ struct FCameraRigState
 	float ArmLength = 300.f;
 	FVector SocketOffset = FVector::ZeroVector;
 	FVector TargetOffset = FVector::ZeroVector;
+	FVector AttachOffset = FVector::ZeroVector;
 
 	static FCameraRigState Lerp(const FCameraRigState& A, const FCameraRigState& B, float T)
 	{
@@ -100,6 +121,7 @@ struct FCameraRigState
 		Result.ArmLength = FMath::Lerp(A.ArmLength, B.ArmLength, T);
 		Result.SocketOffset = FMath::Lerp(A.SocketOffset, B.SocketOffset, T);
 		Result.TargetOffset = FMath::Lerp(A.TargetOffset, B.TargetOffset, T);
+		Result.AttachOffset = FMath::Lerp(A.AttachOffset, B.AttachOffset, T);
 		return Result;
 	}
 };
@@ -166,7 +188,8 @@ public:
 	void AddLookInput(const FVector2D& LookAxis);
 
 	/**
-	 * Sets the component that carries the sockets named by FCameraProfile::AttachSocketName (usually the skeletal mesh).
+	 * Sets the component that profiles attach to when they name a socket or set bAttachToSocketParent: the skeletal
+	 * mesh that carries a head socket, or a scene component placed relative to the capsule (first-person anchor).
 	 * Re-applies the attachment of the active profile.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Camera Manager|Adjustments")
@@ -287,6 +310,7 @@ private:
 	float BlendElapsed = 0.f;
 	float BlendDuration = 0.f;
 	bool bProfileBlending = false;
+	bool bWarnedMissingSocket = false;
 
 	FTimerHandle ExternalBlendTimer;
 };

@@ -1,6 +1,8 @@
 # Character Framework - Architecture Overview
 
-Target: Unreal Engine 5.8 | Module macro: `FRAMEWORKS_API` | Files: `InputConfigData.h/.cpp`, `BaseCharacter.h/.cpp`
+Target: Unreal Engine 5.8 | Module macro: `COREFRAMEWORK_API` | Files: `InputConfigData.h/.cpp`, `BaseCharacter.h/.cpp`
+
+> **Documentation status.** Sections 3 (component rig) and 6 (perspective system) describe the first camera design, with cameras as components of the character. The current `ABaseCharacter` has no `FirstPersonCamera`, `ThirdPersonSpringArm` or `ThirdPersonCamera` components: its `CameraManager` component (`UCameraManagerComponent`) creates and owns the camera rig at runtime, and the first-person and third-person views are camera profiles (`FirstPersonCameraName`, `ThirdPersonCameraName`). Until those sections are rewritten, `BaseCharacter.h` and `CameraManagerComponent.h` are the truth for everything about cameras. The other sections were not re-checked against the code in this update.
 
 ---
 
@@ -138,6 +140,18 @@ The mapping context is added in `PawnClientRestart`, which runs on the owning cl
 
 Every handler is `protected virtual` (`Input_Move`, `Input_Look`, `Input_JumpStarted` ...). A child class overrides only what it changes and calls `Super` for the rest.
 
+### 5.5 Input that does not belong to the character
+
+The character binds only input that is about the body: move, look, jump, crouch, sprint, fly, dash, dodge and perspective. Input that must keep working when there is no pawn (pause, menu keys, scoreboard, chat) belongs to the **PlayerController** of the game project.
+
+| Question | Answer |
+|---|---|
+| Who owns the pause key? | The project PlayerController, in its own mapping context. The character never sees it |
+| How does it open the pause menu? | `UUIFrameSubsystem::GetFromController(this)`, then `PushScreen` or `PopScreen` with the screen's gameplay tag (see `Docs/UISystem/UI_HUD_Setup_Guide.md`) |
+| Who decides what pausing means? | The pause screen (`Input Mode`, `Pause Game While Active`, `Is Back Handler`), not the controller and not the character |
+| Can the two mapping contexts clash? | No. The character adds its context in `PawnClientRestart`; the controller adds its own context when its input component is set up. Give them different priorities if a key is ever shared |
+| Is there a framework PlayerController? | No, on purpose: a project has one controller class, so a framework base would block other frameworks. Each project writes `A<Project>PlayerController : APlayerController` (see `Docs/Integration/Project_Integration_Guide.md`, section 2.4) |
+
 ---
 
 ## 6. Perspective system
@@ -271,6 +285,9 @@ RPCs:
 | Extra locomotion rules | Override `UpdateStateMachine()` (call `Super` first, then adjust). |
 | New action tag (Slide, Mantle ...) | Call `RequestAction` from your own logic. |
 | Different movement component | Set your own class through `SetDefaultSubobjectClass` in a child constructor. Input and perspective keep working; only sprint, fly, dash and dodge need a component that provides them. |
+| A character for a game project | Derive `A<Project>Character : ABaseCharacter` in the game module. Its constructor takes `const FObjectInitializer&` and passes it to `Super`, because the base constructor replaces the movement component class through it. Create the Blueprint from the project class. Hooks, input overrides and an example: `Docs/Integration/Project_Integration_Guide.md`, section 5.1. |
+| Project-specific input (interact, fire) | Add a project mapping context and bind the actions in the project character's `SetupPlayerInputComponent` override, after `Super`. The framework context is untouched. |
+| Input that works without a pawn (pause, menus) | The project PlayerController, section 5.5. |
 
 ---
 

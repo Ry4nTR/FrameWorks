@@ -20,6 +20,7 @@ namespace
 		State.ArmLength = Profile.ArmLength;
 		State.SocketOffset = Profile.SocketOffset;
 		State.TargetOffset = Profile.TargetOffset;
+		State.AttachOffset = Profile.AttachOffset;
 		return State;
 	}
 }
@@ -44,7 +45,7 @@ UCameraManagerComponent::UCameraManagerComponent()
 	FirstPerson.ArmLength = 0.f;
 	FirstPerson.bAllowZoom = false;
 	FirstPerson.bDoCollisionTest = false;
-	FirstPerson.TargetOffset = FVector(0.0, 0.0, 64.0);
+	FirstPerson.AttachOffset = FVector(0.0, 0.0, 64.0); // eye height above the capsule center (owner root)
 	FirstPerson.bFirstPerson = true;
 	CameraProfiles.Add(FName(TEXT("FirstPerson")), FirstPerson);
 
@@ -282,7 +283,11 @@ void UCameraManagerComponent::SetSocketParent(USceneComponent* NewSocketParent)
 
 	if (const FCameraProfile* Profile = CameraProfiles.Find(ActiveCameraName))
 	{
-		ApplyAttachment(*Profile);
+		// A new attach point resets the arm's relative transform, so the profile offset is applied again.
+		if (ApplyAttachment(*Profile))
+		{
+			ApplyRigState(Current);
+		}
 	}
 }
 
@@ -432,6 +437,7 @@ void UCameraManagerComponent::ApplyRigState(const FCameraRigState& State)
 		SpringArm->TargetArmLength = State.ArmLength;
 		SpringArm->SocketOffset = State.SocketOffset;
 		SpringArm->TargetOffset = State.TargetOffset;
+		SpringArm->SetRelativeLocation(State.AttachOffset);
 	}
 }
 
@@ -459,10 +465,26 @@ bool UCameraManagerComponent::ApplyAttachment(const FCameraProfile& Profile)
 	USceneComponent* DesiredParent = Owner->GetRootComponent();
 	FName DesiredSocket = NAME_None;
 
-	if (!Profile.AttachSocketName.IsNone() && SocketParent)
+	// A profile that names a socket always attaches to the socket parent, as before.
+	const bool bWantsSocketParent = Profile.bAttachToSocketParent || !Profile.AttachSocketName.IsNone();
+	if (bWantsSocketParent && SocketParent)
 	{
 		DesiredParent = SocketParent;
-		DesiredSocket = Profile.AttachSocketName;
+
+		if (!Profile.AttachSocketName.IsNone())
+		{
+			if (SocketParent->DoesSocketExist(Profile.AttachSocketName))
+			{
+				DesiredSocket = Profile.AttachSocketName;
+			}
+			else if (!bWarnedMissingSocket)
+			{
+				// A missing socket must not break the view: the rig attaches at the origin of the attach component.
+				bWarnedMissingSocket = true;
+				UE_LOG(LogCameraManager, Warning, TEXT("Socket '%s' does not exist on '%s' (owner %s). The rig attaches at the origin of that component instead."),
+					*Profile.AttachSocketName.ToString(), *GetNameSafe(SocketParent), *GetNameSafe(Owner));
+			}
+		}
 	}
 
 	if (!DesiredParent || (SpringArm->GetAttachParent() == DesiredParent && SpringArm->GetAttachSocketName() == DesiredSocket))

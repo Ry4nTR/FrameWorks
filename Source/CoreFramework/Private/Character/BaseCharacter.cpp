@@ -6,6 +6,7 @@
 #include "Camera/CameraComponent.h"
 #include "CameraSystem/CameraManagerComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -17,6 +18,8 @@
 #include "GameFramework/PlayerController.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogBaseCharacter, Log, All);
 
 namespace
 {
@@ -80,15 +83,18 @@ ABaseCharacter::ABaseCharacter(const FObjectInitializer& ObjectInitializer)
 	// Camera rig: the manager creates the spring arm and the camera at runtime and owns every profile.
 	CameraManager = CreateDefaultSubobject<UCameraManagerComponent>(TEXT("CameraManager"));
 
-	// First person: the camera sits on the head socket of the third-person mesh and follows its animation.
+	// First person: the camera hangs on FirstPersonCameraAnchor, a point relative to the capsule, so it needs no body
+	// mesh and no socket. To follow the animated head of a visible body instead, set Attach Socket Name on this
+	// profile (CameraManager > Camera Profiles); PostInitializeComponents then attaches the rig to the body mesh.
 	FCameraProfile FirstPersonProfile;
 	FirstPersonProfile.ArmLength = 0.0f;
 	FirstPersonProfile.TargetOffset = FVector::ZeroVector;
 	FirstPersonProfile.SocketOffset = FVector::ZeroVector;
+	FirstPersonProfile.AttachOffset = FVector::ZeroVector;
 	FirstPersonProfile.bAllowZoom = false;
 	FirstPersonProfile.bDoCollisionTest = false;
 	FirstPersonProfile.bFirstPerson = true;
-	FirstPersonProfile.AttachSocketName = TEXT("head");
+	FirstPersonProfile.bAttachToSocketParent = true;
 	CameraManager->CameraProfiles.Add(FirstPersonCameraName, FirstPersonProfile);
 
 	// Third person: spring arm on the capsule, raised to head height.
@@ -100,9 +106,15 @@ ABaseCharacter::ABaseCharacter(const FObjectInitializer& ObjectInitializer)
 	CameraManager->CameraProfiles.Add(ThirdPersonCameraName, ThirdPersonProfile);
 	CameraManager->DefaultCameraName = ThirdPersonCameraName;
 
+	// Eye point of the first-person view: a plain scene component under the capsule, placed in the Blueprint viewport.
+	FirstPersonCameraAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("FirstPersonCameraAnchor"));
+	FirstPersonCameraAnchor->SetupAttachment(GetRootComponent());
+	FirstPersonCameraAnchor->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f));
+
 	// First-person arms follow the managed camera (attached in PostInitializeComponents) and are only rendered for the owner.
+	// At design time they are a child of the eye point, so their transform is relative to where the camera will sit.
 	FirstPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FirstPersonMesh"));
-	FirstPersonMesh->SetupAttachment(GetRootComponent());
+	FirstPersonMesh->SetupAttachment(FirstPersonCameraAnchor);
 	FirstPersonMesh->SetOnlyOwnerSee(true);
 	FirstPersonMesh->SetOwnerNoSee(false);
 	FirstPersonMesh->CastShadow = false;
@@ -135,10 +147,12 @@ void ABaseCharacter::PostInitializeComponents()
 
 	if (CameraManager)
 	{
-		// The first-person profile attaches the camera to a socket of this mesh.
-		CameraManager->SetSocketParent(GetMesh());
+		// Decides whether the first-person profile hangs on the anchor or on a socket of the body mesh.
+		ConfigureFirstPersonCameraAttachment();
 
 		// The managed camera exists once the manager is initialized (never on a dedicated server).
+		// The arms keep their relative transform: relative to the anchor at design time, relative to the camera at
+		// runtime. At rest the camera sits at the anchor, so both describe the same place.
 		if (FirstPersonMesh)
 		{
 			if (UCameraComponent* ManagedCamera = CameraManager->GetCameraComponent())
@@ -513,6 +527,41 @@ void ABaseCharacter::RefreshPerspectiveVisuals()
 	{
 		BodyMesh->SetOwnerNoSee(bFirstPersonView);
 	}
+}
+
+void ABaseCharacter::ConfigureFirstPersonCameraAttachment()
+{
+	if (!CameraManager)
+	{
+		return;
+	}
+
+	// Default: the camera hangs on the anchor, which sits relative to the capsule. No mesh and no socket are involved.
+	USceneComponent* AttachComponent = FirstPersonCameraAnchor;
+
+	// A first-person profile that names a socket (a visible body with an animated view) attaches to the body mesh,
+	// but only when that socket really exists. A missing head bone must never move the camera to the floor.
+	const FCameraProfile* Profile = CameraManager->CameraProfiles.Find(FirstPersonCameraName);
+	if (Profile && !Profile->AttachSocketName.IsNone())
+	{
+		USkeletalMeshComponent* BodyMesh = GetMesh();
+		if (BodyMesh && BodyMesh->DoesSocketExist(Profile->AttachSocketName))
+		{
+			AttachComponent = BodyMesh;
+		}
+		else
+		{
+			UE_LOG(LogBaseCharacter, Warning, TEXT("%s: first-person profile '%s' names socket '%s', which the body mesh does not have. The camera uses FirstPersonCameraAnchor instead."),
+				*GetNameSafe(this), *FirstPersonCameraName.ToString(), *Profile->AttachSocketName.ToString());
+
+			FCameraProfile FixedProfile = *Profile;
+			FixedProfile.AttachSocketName = NAME_None;
+			FixedProfile.bAttachToSocketParent = true;
+			CameraManager->RegisterCameraProfile(FirstPersonCameraName, FixedProfile);
+		}
+	}
+
+	CameraManager->SetSocketParent(AttachComponent);
 }
 
 // ----------------------------------------------------------------------

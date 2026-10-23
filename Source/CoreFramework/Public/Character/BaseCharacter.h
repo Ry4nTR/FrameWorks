@@ -23,15 +23,23 @@
 //   Swimming has no input: it starts and ends with the PhysicsVolume (bWaterVolume).
 //
 // COMPONENT RIG (all created in the constructor)
-//   GetMesh()          Third-person mesh. Replicated to everyone. Hidden from the local player in first person.
-//   FirstPersonMesh    First-person arms. Visible to the owning player only, attached to the managed camera.
-//   CameraManager      Owns the spring arm and the camera. The "FirstPerson" profile attaches the rig to the head
-//                      socket of the third-person mesh, the "ThirdPerson" profile to the capsule.
+//   GetMesh()                Third-person body mesh. Optional: a pure first-person character leaves it empty.
+//                            Replicated to everyone. Hidden from the local player in first person.
+//   FirstPersonCameraAnchor  Eye point of the first-person view, a child of the capsule. Move it in the Blueprint
+//                            viewport to place the first-person camera relative to the capsule.
+//   FirstPersonMesh          First-person arms. Visible to the owning player only. A child of the anchor at design
+//                            time, so it is placed relative to the eye point; at runtime it follows the managed camera
+//                            with the same relative transform.
+//   CameraManager            Owns the spring arm and the camera. The "FirstPerson" profile hangs the rig on the anchor
+//                            (no mesh and no socket needed), or on the body mesh when the profile names a socket that
+//                            exists (a visible body with an animated view). The "ThirdPerson" profile attaches to the
+//                            capsule.
 //
 // PERSPECTIVE
 //   The perspective (first or third person) is character state: it is replicated and it selects the rotation policy
 //   of the movement component. This class maps it to a camera profile name and leaves everything else to the
 //   camera manager. Other camera profiles (aim, cinematic) are driven through GetCameraManager().
+//   A pure first-person game sets DefaultPerspective to FirstPerson and bAllowPerspectiveToggle to false.
 //
 // PORTING: copy this folder, keep COREFRAMEWORK_API (or rename it to your module macro).
 
@@ -43,6 +51,7 @@
 #include "InputActionValue.h"
 #include "BaseCharacter.generated.h"
 
+class USceneComponent;
 class USkeletalMeshComponent;
 class UCameraManagerComponent;
 class UInputConfigData;
@@ -89,7 +98,21 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
 	TObjectPtr<UStateMachineComponent> StateMachine;
 
-	/** First-person arms. Owner-only. Give it its own Animation Blueprint based on the AnimationInstance class. */
+	/**
+	 * Eye point of the first-person view, a child of the capsule (default: 64 cm above the capsule center).
+	 * Select it in the Components panel and move it to place the first-person camera relative to the capsule, as in the
+	 * standard first-person templates. The camera rig attaches to it while the first-person profile is active, and
+	 * FirstPersonMesh is its child. It needs no mesh and no socket. Fine adjustments per profile (for example a lower
+	 * eye while crouching) use Attach Offset on the camera profile.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
+	TObjectPtr<USceneComponent> FirstPersonCameraAnchor;
+
+	/**
+	 * First-person arms. Owner-only. Give it its own Animation Blueprint based on the AnimationInstance class.
+	 * Its Location, Rotation and Scale in the Components panel are relative to the eye point (FirstPersonCameraAnchor)
+	 * and, at runtime, to the first-person camera, which sits at the same place.
+	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
 	TObjectPtr<USkeletalMeshComponent> FirstPersonMesh;
 
@@ -119,7 +142,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Camera")
 	bool bAllowPerspectiveToggle = true;
 
-	/** Camera profile used in first person. The head socket is set on that profile (AttachSocketName). */
+	/**
+	 * Camera profile used in first person. Its placement is data on that profile (CameraManager > Camera Profiles):
+	 * Attach Offset relative to the anchor, an optional Attach Socket Name for a visible body, field of view and so on.
+	 * With no socket named, the camera hangs on FirstPersonCameraAnchor and no head bone is needed.
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Camera")
 	FName FirstPersonCameraName = TEXT("FirstPerson");
 
@@ -213,6 +240,9 @@ private:
 	void ApplyPerspective(ECharacterPerspective NewPerspective);
 	void ApplyMovementRotationPolicy();
 	void RefreshPerspectiveVisuals();
+
+	/** Chooses what the first-person profile attaches to: the body mesh socket it names, or FirstPersonCameraAnchor. */
+	void ConfigureFirstPersonCameraAttachment();
 
 	/** True on the ground (or when there is no framework movement component). */
 	bool IsGroundDomain() const;

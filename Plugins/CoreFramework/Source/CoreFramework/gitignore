@@ -1,0 +1,18 @@
+# Unreal Engine generated folders
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+
+# C++ / Visual Studio / IDE temporary files
+.vs/
+.idea/
+.vscode/
+*.xcworkspace
+*.xcodeproj
+*.sln
+*.suo
+*.user
+*.userosscache
+*.slnf

@@ -539,25 +539,42 @@ void ABaseCharacter::ConfigureFirstPersonCameraAttachment()
 	// Default: the camera hangs on the anchor, which sits relative to the capsule. No mesh and no socket are involved.
 	USceneComponent* AttachComponent = FirstPersonCameraAnchor;
 
-	// A first-person profile that names a socket (a visible body with an animated view) attaches to the body mesh,
-	// but only when that socket really exists. A missing head bone must never move the camera to the floor.
-	const FCameraProfile* Profile = CameraManager->CameraProfiles.Find(FirstPersonCameraName);
-	if (Profile && !Profile->AttachSocketName.IsNone())
+	if (const FCameraProfile* Profile = CameraManager->CameraProfiles.Find(FirstPersonCameraName))
 	{
-		USkeletalMeshComponent* BodyMesh = GetMesh();
-		if (BodyMesh && BodyMesh->DoesSocketExist(Profile->AttachSocketName))
-		{
-			AttachComponent = BodyMesh;
-		}
-		else
-		{
-			UE_LOG(LogBaseCharacter, Warning, TEXT("%s: first-person profile '%s' names socket '%s', which the body mesh does not have. The camera uses FirstPersonCameraAnchor instead."),
-				*GetNameSafe(this), *FirstPersonCameraName.ToString(), *Profile->AttachSocketName.ToString());
+		FCameraProfile Resolved = *Profile;
+		bool bProfileChanged = false;
+		bool bUseBodySocket = false;
 
-			FCameraProfile FixedProfile = *Profile;
-			FixedProfile.AttachSocketName = NAME_None;
-			FixedProfile.bAttachToSocketParent = true;
-			CameraManager->RegisterCameraProfile(FirstPersonCameraName, FixedProfile);
+		// A first-person profile that names a socket (a visible body with an animated view) attaches to the body mesh,
+		// but only when that socket really exists. A missing head bone must never move the camera to the floor.
+		if (!Resolved.AttachSocketName.IsNone())
+		{
+			USkeletalMeshComponent* BodyMesh = GetMesh();
+			if (BodyMesh && BodyMesh->DoesSocketExist(Resolved.AttachSocketName))
+			{
+				AttachComponent = BodyMesh;
+				bUseBodySocket = true;
+			}
+			else
+			{
+				UE_LOG(LogBaseCharacter, Warning, TEXT("%s: first-person profile '%s' names socket '%s', which the body mesh does not have. The camera uses FirstPersonCameraAnchor instead."),
+					*GetNameSafe(this), *FirstPersonCameraName.ToString(), *Resolved.AttachSocketName.ToString());
+				Resolved.AttachSocketName = NAME_None;
+				bProfileChanged = true;
+			}
+		}
+
+		// Without a body socket the profile always hangs on the anchor. This also covers a Blueprint that saved its own
+		// copy of the profile map before this option existed.
+		if (!bUseBodySocket && !Resolved.bAttachToSocketParent)
+		{
+			Resolved.bAttachToSocketParent = true;
+			bProfileChanged = true;
+		}
+
+		if (bProfileChanged)
+		{
+			CameraManager->RegisterCameraProfile(FirstPersonCameraName, Resolved);
 		}
 	}
 

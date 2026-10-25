@@ -6,8 +6,6 @@ Prerequisites: the four framework folders and `FrameWorks.Build.cs` (with `Enhan
 
 > **Game projects.** This document sets up the framework character itself (`BP_BaseCharacter`). In a game project, create the character Blueprint from the project's own class (`A<Project>Character : ABaseCharacter`), not from `BaseCharacter`, and set the same Class Defaults on it. See `Docs/Integration/Project_Integration_Guide.md`, sections 2.1 and 5.1.
 
-> **Documentation status.** Step 6 still lists the components `FirstPersonCamera`, `ThirdPersonSpringArm` and `ThirdPersonCamera` and the Class Default *First Person Camera Socket Name*. The current character has none of them: the camera rig is created at runtime by its `CameraManager` component, and the head socket is set on the `FirstPerson` camera profile (`AttachSocketName`). For the cameras in Step 6, use `CameraManagerComponent.h` until the step is rewritten. The other steps were not re-checked against the code in this update.
-
 ---
 
 ## Step 1 - Check project input settings
@@ -97,21 +95,23 @@ Leave an action empty to remove that feature from the game. For a ground-only ga
 
 ## Step 6 - Create the character Blueprint
 
-1. In `Blueprints`, right-click > **Blueprint Class**, search for **BaseCharacter**, name the asset `BP_BaseCharacter`.
+1. In `Blueprints`, right-click > **Blueprint Class**, search for **BaseCharacter**, name the asset `BP_BaseCharacter`. (In a game project, create it from the project's own character class instead.)
 2. Open it. The **Components** panel already contains everything below (nothing to add):
 
-   `CapsuleComponent`, `Mesh`, `FirstPersonCamera`, `FirstPersonMesh`, `ThirdPersonSpringArm`, `ThirdPersonCamera`, `StateMachine`, `CharacterMovement`.
+   `CapsuleComponent`, `Mesh`, `FirstPersonCameraAnchor`, `FirstPersonMesh` (a child of the anchor), `CameraManager`, `StateMachine`, `CharacterMovement`.
 
-3. Select **Mesh** (third-person body):
-   - **Skeletal Mesh Asset:** your character mesh.
+   The spring arm and the camera are not in the list: the `CameraManager` component creates them at runtime.
+
+3. Select **Mesh** (third-person body, **optional**):
+   - **Skeletal Mesh Asset:** your character mesh. Leave it empty for a pure first-person character.
    - **Animation Mode:** Use Animation Blueprint. **Anim Class:** your ABP (from Stage 3) or leave empty for now.
    - The C++ constructor places the mesh at `Z = -88` with `Yaw = -90`, which fits the UE5 mannequin. Adjust only if your mesh pivot differs.
-4. Select **FirstPersonMesh** (arms):
+4. Select **FirstPersonCameraAnchor** (the eye point). Move it in the viewport to where the first-person camera should sit. The default is 64 cm above the capsule center. It needs no mesh and no socket.
+5. Select **FirstPersonMesh** (arms):
    - **Skeletal Mesh Asset:** your first-person arms mesh.
    - **Anim Class:** its own Animation Blueprint. It can use the same `AnimationInstance` parent class as the body.
-   - Move it in the viewport relative to `FirstPersonCamera` until the arms sit correctly in view.
-5. Select **FirstPersonCamera**. It is attached to the `Mesh` socket named in *Class Defaults > First Person Camera Socket Name*. Add a small **Relative Location** offset if the camera needs to sit forward of the head bone.
-6. Select **ThirdPersonSpringArm**. Tune *Target Arm Length*, *Socket Offset* and *Camera Lag* to taste.
+   - Position it with **Location / Rotation** in the Details panel or the viewport. Its transform is relative to the eye point (the anchor), and at runtime to the camera, which sits at the same place.
+6. Select **CameraManager** and open **Camera Manager > Config > Camera Profiles**. Tune the `ThirdPerson` profile (arm length, shoulder offset) and the `FirstPerson` profile (field of view, pitch limits, look scale, `Attach Offset`). Details: `Docs/CameraSystem/Camera_Blueprint_Setup.md`.
 7. Open **Class Defaults** and set:
 
 | Category | Property | Value |
@@ -120,12 +120,28 @@ Leave an action empty to remove that feature from the game. For a ground-only ga
 | Character > Input | Double Jump Activates Flight | on (pressing Jump while airborne starts flight; off keeps it a plain jump) |
 | Character > Camera | Default Perspective | First Person or Third Person |
 | Character > Camera | Allow Perspective Toggle | on (off locks the view) |
-| Character > Camera | First Person Camera Socket Name | `head` (UE5 mannequin) or your head bone/socket |
+| Character > Camera | First Person Camera Name, Third Person Camera Name | the profile names, normally left as `FirstPerson` and `ThirdPerson` |
 | Character > States | Moving Speed Threshold | `3` |
 | Character > States | Water Transition Duration | `0.6` |
 
 8. Select **CharacterMovement** and configure domains, speeds and actions using `Movement_Blueprint_Setup.md`.
 9. Compile and save.
+
+### Step 6b - Pure first-person character (no body mesh, no head socket)
+
+Use this for a first-person game that only shows arms. Starting from Step 6:
+
+1. **Class Defaults:** Default Perspective = First Person, Allow Perspective Toggle = off.
+2. **Mesh:** leave the Skeletal Mesh Asset empty. Nothing needs a head bone.
+3. **FirstPersonMesh:** assign the arms mesh and its Animation Blueprint.
+4. **FirstPersonCameraAnchor:** set its Z to the eye height you want (UE first-person templates use about 60 to 64).
+5. **FirstPersonMesh:** move it until the arms sit correctly in view (the template arms usually sit a little below and behind the eye point).
+
+### Step 6c - First person with a visible body (head socket)
+
+1. Assign the body mesh to **Mesh** with its Animation Blueprint.
+2. **CameraManager > Camera Profiles > FirstPerson:** set **Attach Socket Name** to your head socket or bone (for example `head`) and set **Attach Offset** to `0, 0, 0`.
+3. Play. If the socket does not exist on the mesh, the Output Log shows a warning from `LogBaseCharacter` and the camera uses the anchor instead.
 
 ## Step 7 - Use the character in the level
 
@@ -143,6 +159,7 @@ In a game project, the GameMode is the project's own (a Blueprint child of `A<Pr
 | `Space` | Jump |
 | `V` | View switches; first person hides the body and shows the arms |
 | `V` again | Third person returns, arms hidden |
+| Pure first person (Step 6b): press Play | Camera at eye height, arms visible, no body, `V` does nothing |
 | `Left Shift` while moving | Faster movement (Run) |
 | `Left Ctrl` | Crouch |
 | `Space` again while in the air | Flight starts (if the Fly domain is enabled) |
@@ -179,7 +196,9 @@ In a game project, the GameMode is the project's own (a Blueprint child of `A<Pr
 | Look is inverted | The Y-only Negate modifier is missing on the mouse mapping. |
 | `W` and `S` move sideways | The Swizzle Input Axis Values modifier is missing on the `Move` mappings. |
 | Ascend or descend only nudges once | `IA_Jump` or `IA_Crouch` has a *Pressed* trigger. Remove it. |
-| First-person camera is on the floor | The `head` socket or bone is missing on the mesh. Change *First Person Camera Socket Name*. |
+| First-person camera is at the wrong height | Move `FirstPersonCameraAnchor`, or change `Attach Offset` on the `FirstPerson` camera profile. |
+| Output Log warning "first-person profile ... names socket ... which the body mesh does not have" | `Attach Socket Name` on the `FirstPerson` profile does not exist on `Mesh`. Clear it (pure first person) or fix the name (visible body). The camera already uses the anchor meanwhile. |
+| Arms are not where expected | `FirstPersonMesh` Location and Rotation are relative to the eye point and to the camera, not to the capsule. Move the arms, not the camera. |
 | Both body and arms are visible in first person | The body is not the `Mesh` component of this character, or the arms mesh is missing its owner-only flag (it is set by default; check you did not override it). |
 | You see no character at all | The view is first person and no mesh is assigned to `FirstPersonMesh`. Assign the arms mesh, or press `V` for third person. |
 | Character is a T-pose | No Anim Class on `Mesh`. Stage 3 covers the Animation Blueprint. |

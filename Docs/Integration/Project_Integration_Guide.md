@@ -4,7 +4,7 @@
 **Engine:** Unreal Engine 5.8 · **Plugin:** `CoreFramework` (export macro `COREFRAMEWORK_API`) · **Branch imported by projects:** `coreframework-branch`
 **Purpose:** the primary reference for building a game project on CoreFramework. Attach it to a new chat together with the project name and the assistant knows which C++ classes and Blueprints to create, what they inherit from, and where every file goes.
 
-> **Status.** Written from the repository `Ry4nTR/FrameWorks` at commit `5b795d5` and from the first game project built with it (`SunsetCove`). The C++ patterns of section 5 were syntax-checked against the real `BaseCharacter.h` with stub engine headers. Nothing was compiled with Unreal Engine and nothing was run in the editor.
+> **Status.** Written from the repository `Ry4nTR/FrameWorks` at commit `373a9dc`, plus the first-person camera changes delivered after it (`FirstPersonCameraAnchor`, `Attach Offset`), and from the first game project built with it (`SunsetCove`). The C++ patterns of section 5 were syntax-checked against the real `BaseCharacter.h` with stub engine headers. Nothing was compiled with Unreal Engine and nothing was run in the editor.
 
 ---
 
@@ -19,7 +19,7 @@ When this guide is attached and the user names a project, call it `<Project>` (e
 5. **Mark project logic** with `// <PROJECT> GAME LOGIC` comments at every hook.
 6. **Do not use:** templates, generation scripts, a framework `BaseGameMode`, `BaseGameInstance` or `BasePlayerController`, camera components on the character, `Set Input Mode` calls next to the UI framework, game rules or game stats inside `CoreFramework`.
 7. **Say plainly** what was not compiled or tested.
-8. **Known drift in the older framework docs** (trust the headers, not the docs): some documents still say `FRAMEWORKS_API` (the macro is `COREFRAMEWORK_API`); `Character_Architecture_Overview.md` sections 3 and 6 and `Character_Blueprint_Setup.md` Step 6 still describe the first camera design (cameras as components of the character), while the code creates the camera rig at runtime in `UCameraManagerComponent` and there is no camera document yet; `UI_HUD_Setup_Guide.md` 3.1 names the branch `plugin-only` (the real branch is `coreframework-branch`).
+8. **Known drift in the older framework docs** (trust the headers, not the docs): `Movement_Architecture_Overview.md` and `StateMachine_Architecture_Overview.md` still say `FRAMEWORKS_API` (the macro is `COREFRAMEWORK_API`); `UI_HUD_Setup_Guide.md` 3.1 names the branch `plugin-only` (the real branch is `coreframework-branch`). The camera is documented in `Docs/CameraSystem/`; the character documents describe it correctly.
 
 ---
 
@@ -69,7 +69,8 @@ UUIFrameSubsystem (ULocalPlayerSubsystem) <-- ABaseHUD::BeginPlay               
 * **C++:** `A<Project>Character : public ABaseCharacter` (`#include "Character/BaseCharacter.h"`). **Blueprint:** `BP_Character`.
 * The framework already provides Enhanced Input routing (`UInputConfigData`), movement domains and predicted actions, the runtime camera rig, perspective, replication of state tags, and the `StateMachine` driver. The project class only adds game logic through overrides and hooks (section 5.1).
 * `BP_Character` is **not** a child of the plugin's `BP_BaseCharacter` (a Blueprint has one parent). Open `BP_BaseCharacter` as a reference and set the same things in your Blueprint: `Input Config`, the skeletal mesh and `Anim Class`, the `FirstPersonMesh` animation, and the cameras in the `CameraManager` component.
-* **References:** `Docs/Character/Character_Architecture_Overview.md` and `Docs/Character/Character_Blueprint_Setup.md` for the full character, camera and input details; also `Docs/Movement/`, `Docs/StateMachine/`, `Docs/Animation/`. In the Blueprint setup document, create your Blueprint from `A<Project>Character` where it says to create it from the base character.
+* **First person needs no body mesh and no head socket.** The first-person camera hangs on `FirstPersonCameraAnchor`, a component under the capsule that you move in the Blueprint viewport; `FirstPersonMesh` (the arms) is placed relative to it. A pure first-person game sets `Default Perspective` = First Person, `Allow Perspective Toggle` = off and leaves `Mesh` empty. A visible body follows the animated head by naming a socket on the `FirstPerson` camera profile.
+* **References:** `Docs/Character/Character_Architecture_Overview.md` and `Docs/Character/Character_Blueprint_Setup.md` for the full character and input details; `Docs/CameraSystem/Camera_Architecture_Overview.md` and `Camera_Blueprint_Setup.md` for cameras, profiles and first-person placement; also `Docs/Movement/`, `Docs/StateMachine/`, `Docs/Animation/`. In the Blueprint setup document, create your Blueprint from `A<Project>Character` where it says to create it from the base character.
 
 ### 2.2 GameMode (two classes)
 
@@ -174,7 +175,7 @@ Right-click in the Content Browser → **Blueprint Class → All Classes** → s
 
 | Blueprint | Folder | Parent | Class Defaults to set |
 |---|---|---|---|
-| `BP_Character` | `Character/Blueprints/` | `A<Project>Character` | `Input Config` (plugin asset `DA_InputConfig_Default` or your own), skeletal mesh and `Anim Class`, `FirstPersonMesh` animation, cameras in `CameraManager`. Reference: the plugin's `BP_BaseCharacter` |
+| `BP_Character` | `Character/Blueprints/` | `A<Project>Character` | `Input Config` (plugin asset `DA_InputConfig_Default` or your own), `Default Perspective` and `Allow Perspective Toggle`, `FirstPersonCameraAnchor` (eye position), `FirstPersonMesh` (arms mesh, `Anim Class`, transform), cameras in `CameraManager > Camera Profiles`; body `Mesh` and its `Anim Class` only for a visible body. Reference: the plugin's `BP_BaseCharacter` |
 | `BP_GameMode_Gameplay` | `Core/` | `A<Project>GameplayGameMode` | see 2.2 |
 | `BP_GameMode_MainMenu` | `Core/` | `A<Project>MainMenuGameMode` | see 2.2 |
 | `BP_GameInstance` | `Core/` | `U<Project>GameInstance` | nothing required |

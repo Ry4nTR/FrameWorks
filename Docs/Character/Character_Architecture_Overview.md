@@ -2,8 +2,6 @@
 
 Target: Unreal Engine 5.8 | Module macro: `COREFRAMEWORK_API` | Files: `InputConfigData.h/.cpp`, `BaseCharacter.h/.cpp`
 
-> **Documentation status.** Sections 3 (component rig) and 6 (perspective system) describe the first camera design, with cameras as components of the character. The current `ABaseCharacter` has no `FirstPersonCamera`, `ThirdPersonSpringArm` or `ThirdPersonCamera` components: its `CameraManager` component (`UCameraManagerComponent`) creates and owns the camera rig at runtime, and the first-person and third-person views are camera profiles (`FirstPersonCameraName`, `ThirdPersonCameraName`). Until those sections are rewritten, `BaseCharacter.h` and `CameraManagerComponent.h` are the truth for everything about cameras. The other sections were not re-checked against the code in this update.
-
 ---
 
 ## 1. Purpose
@@ -11,7 +9,7 @@ Target: Unreal Engine 5.8 | Module macro: `COREFRAMEWORK_API` | Files: `InputCon
 `ABaseCharacter` is a ready-to-use `ACharacter` with three jobs:
 
 1. **Input:** bind Enhanced Input actions from one data asset (`UInputConfigData`).
-2. **View:** own a complete first-person and third-person rig and switch between them at runtime, in multiplayer.
+2. **View:** drive a first-person and a third-person view through the camera manager and switch between them at runtime, in multiplayer. A pure first-person character needs no body mesh and no head socket.
 3. **Wiring:** connect the Movement framework to the State Machine framework, so the Animation framework always receives a correct set of Gameplay Tags.
 
 It is the only class in the library that knows about the other frameworks. Everything else stays independent.
@@ -35,27 +33,50 @@ Frameworks/Character/
 | `GameplayTags` | Module | Action tags passed to the state machine |
 | Movement framework | Source | `UBaseCharacterMovementComponent` is the default movement component |
 | State Machine framework | Source | `UStateMachineComponent` and the native tag vocabulary |
+| Camera framework | Source | `UCameraManagerComponent` owns the camera rig and the profiles (see `Docs/CameraSystem/`) |
 
-Compile-time, the Character folder needs the Movement and State Machine headers. At runtime each part is optional (section 9).
+Compile-time, the Character folder needs the Movement, State Machine and Camera headers. At runtime each part is optional (section 9).
 
 ---
 
 ## 3. Component rig
 
-All components are created in the C++ constructor, so a Blueprint child needs no setup to have a working rig.
+The character creates its body, arms and logic components in the C++ constructor. The camera rig itself (a spring arm and a camera) is created at runtime by the `CameraManager` component and does not exist on a dedicated server, so it never appears in the Blueprint Components panel. A Blueprint child needs no setup to have a working rig.
 
 | Component | Type | Attached to | Notes |
 |---|---|---|---|
 | `CapsuleComponent` | `UCapsuleComponent` | Root | Radius 34, half height 88 (the standard character capsule) |
-| `Mesh` (`GetMesh()`) | `USkeletalMeshComponent` | Capsule | **Third-person mesh.** Replicated and visible to everyone. Hidden from the local player only while in first person. Casts a hidden shadow so the local shadow stays correct. Animation always ticks, because the first-person camera rides on it. |
-| `FirstPersonCamera` | `UCameraComponent` | `Mesh`, socket `FirstPersonCameraSocketName` (default `head`) | Uses pawn control rotation. Inactive until first person is selected. |
-| `FirstPersonMesh` | `USkeletalMeshComponent` | `FirstPersonCamera` | **First-person arms.** Owner-only rendering, no shadow, no collision. Hidden until first person is selected. |
-| `ThirdPersonSpringArm` | `USpringArmComponent` | Capsule | Length 350, collision test on, uses pawn control rotation. |
-| `ThirdPersonCamera` | `UCameraComponent` | Spring arm socket | Active by default. |
+| `Mesh` (`GetMesh()`) | `USkeletalMeshComponent` | Capsule | **Third-person body mesh. Optional:** a pure first-person character leaves it without a mesh asset. Replicated and visible to everyone. Hidden from the local player only while in first person. Casts a hidden shadow so the local shadow stays correct. Animation always ticks, so a camera on one of its sockets stays in sync. |
+| `FirstPersonCameraAnchor` | `USceneComponent` | Capsule | **Eye point of the first-person view.** Default: 64 cm above the capsule center. Select it in the Components panel and move it to place the first-person camera. It needs no mesh and no socket. |
+| `FirstPersonMesh` | `USkeletalMeshComponent` | `FirstPersonCameraAnchor` at design time, the managed camera at runtime | **First-person arms.** Owner-only rendering, no shadow, no collision. Hidden until first person is selected. The relative transform is kept when it moves to the camera. |
+| `CameraManager` | `UCameraManagerComponent` | (none) | Creates the spring arm and the camera at runtime and switches between named camera profiles. Profiles are data (`Camera Profiles`). See `Docs/CameraSystem/`. |
 | `StateMachine` | `UStateMachineComponent` | (none) | Replicates its own properties. |
 | `CharacterMovement` | `UBaseCharacterMovementComponent` | (none) | Swapped in through `SetDefaultSubobjectClass`. |
 
-Exactly one camera is active at a time. The engine picks the first active camera component of the view target, so the framework toggles `SetActive` on both cameras together.
+### 3.1 Placing the first-person camera and the arms
+
+Three values place the first-person view. Each has one job, and all of them are plain relative transforms, as in the standard Unreal first-person templates.
+
+| What | Where you set it | Relative to |
+|---|---|---|
+| Base eye position | Location of `FirstPersonCameraAnchor` (Components panel) | The capsule |
+| Per-profile adjustment (a lower eye while crouching, an aim position) | `Attach Offset` on the camera profile (`CameraManager` > `Camera Profiles` > `FirstPerson`) | The anchor. Blends between profiles |
+| Arms | Location, Rotation and Scale of `FirstPersonMesh` (Components panel) | The anchor at design time, the camera at runtime. At rest the camera sits at the anchor, so both are the same place |
+
+What the first-person camera attaches to is decided once, in `PostInitializeComponents`:
+
+| First-person profile | The camera hangs on |
+|---|---|
+| Names no socket (default) | `FirstPersonCameraAnchor`. No body mesh and no head bone are needed |
+| Names a socket (`Attach Socket Name`) that exists on `Mesh` | That socket of the body mesh: a visible body with an animated view. The anchor then plays no part for the camera |
+| Names a socket that does not exist on `Mesh` | `FirstPersonCameraAnchor`, and one warning is logged (`LogBaseCharacter`) |
+
+Notes:
+
+- The rig follows the control rotation, so the rotation of the anchor is ignored. Only its position counts.
+- An offset is in the local space of the capsule, which faces the camera yaw in first person. Keep eye offsets mostly on Z (height) and use small values on X and Y.
+- A profile with a non-zero `Attach Offset` or `Socket Offset` moves the camera away from the anchor. The arms follow the camera, so adjust the arms transform if you change those.
+- A Blueprint that saved its own copy of the `Camera Profiles` map keeps working: the character fills in the attachment fields at startup.
 
 ---
 
@@ -162,6 +183,7 @@ The character binds only input that is about the body: move, look, jump, crouch,
 |---|---|
 | `DefaultPerspective` | Perspective at spawn. |
 | `bAllowPerspectiveToggle` | Set false to lock the view. |
+| `FirstPersonCameraName`, `ThirdPersonCameraName` | Names of the camera profiles used for each view (defaults `FirstPerson` and `ThirdPerson`). |
 | `SetPerspective(New)` / `TogglePerspective()` | Switch the view. Runs only on the locally controlled character. |
 | `GetPerspective()` | Current perspective. |
 | `OnPerspectiveChanged` | Dynamic delegate (bind from Blueprint or C++). |
@@ -169,21 +191,34 @@ The character binds only input that is about the body: move, look, jump, crouch,
 
 ### 6.2 Visibility matrix
 
-| Machine | Perspective | Third-person camera | First-person camera | Third-person mesh | First-person mesh |
-|---|---|---|---|---|---|
-| Owning player | Third | active | inactive | visible | hidden |
-| Owning player | First | inactive | active | hidden from owner (shadow kept) | visible |
-| Any other player | (any) | active | inactive | visible | hidden (owner-only) |
+| Machine | Perspective | Camera profile | Third-person mesh | First-person mesh |
+|---|---|---|---|---|
+| Owning player | Third | `ThirdPersonCameraName` | visible | hidden |
+| Owning player | First | `FirstPersonCameraName` | hidden from owner (shadow kept) | visible |
+| Any other player | (any) | third-person profile (nobody views through that rig) | visible | hidden (owner-only) |
+
+A pure first-person project has no body mesh, so other players see nothing of the character. Assign a mesh to `Mesh` if they must see a body.
 
 ### 6.3 What a switch does
 
 1. Sets `ActivePerspective` locally.
 2. Tells the movement component whether the body should follow the camera yaw (first person) or turn toward the movement direction (third person). **This runs on the server too**, otherwise client and server would rotate the body differently and every move would be corrected.
-3. Toggles cameras and mesh visibility.
+3. Switches the camera manager to the matching profile as an instant cut (blend time 0), shows or hides the arms, and hides the body mesh from its owner in first person.
 4. Fires `OnPerspectiveChanged` and `BP_OnPerspectiveChanged`.
 5. If the caller is a client, sends `ServerSetPerspective` (reliable).
 
-Use the delegate for HUD, crosshair, field of view, audio or material changes. Nothing in the framework hard-codes those.
+Use the delegate for HUD, crosshair, audio or material changes. Nothing in the framework hard-codes those. Field of view, aim and other camera behavior are camera profiles: see `Docs/CameraSystem/`.
+
+### 6.4 Pure first-person setup
+
+A first-person game with arms only, no body and no head bone:
+
+1. Class Defaults: `Default Perspective` = First Person, `Allow Perspective Toggle` = off.
+2. Leave `Mesh` without a mesh asset. Assign the arms mesh and its own Animation Blueprint to `FirstPersonMesh`.
+3. Move `FirstPersonCameraAnchor` to the eye height you want and position `FirstPersonMesh` relative to it (section 3.1).
+4. Tune field of view, pitch limits and look scale on the `FirstPerson` camera profile.
+
+Nothing else is required. `Docs/CameraSystem/Camera_Blueprint_Setup.md`, Step 3, has the click-by-click version.
 
 ---
 
@@ -272,7 +307,8 @@ RPCs:
 | Water disabled on the movement component | The character cannot enter water movement, even inside a Water Volume. |
 | No state machine (a C++ child uses `DoNotCreateDefaultSubobject(TEXT("StateMachine"))`) | `UpdateStateMachine` and action forwarding return immediately. Movement and input are unaffected. |
 | No first-person mesh asset assigned | First person shows only the camera view. |
-| The `head` socket is missing on the third-person mesh | The first-person camera sits at the mesh origin. Set `FirstPersonCameraSocketName` to an existing socket or bone. |
+| No body mesh assigned to `Mesh` (pure first person) | Nothing breaks. The first-person camera hangs on `FirstPersonCameraAnchor`. Other players see no body. |
+| The first-person profile names a socket the body mesh does not have | One warning in `LogBaseCharacter`; the camera uses `FirstPersonCameraAnchor`. It never falls to the mesh origin. |
 
 ---
 
@@ -285,6 +321,8 @@ RPCs:
 | Extra locomotion rules | Override `UpdateStateMachine()` (call `Super` first, then adjust). |
 | New action tag (Slide, Mantle ...) | Call `RequestAction` from your own logic. |
 | Different movement component | Set your own class through `SetDefaultSubobjectClass` in a child constructor. Input and perspective keep working; only sprint, fly, dash and dodge need a component that provides them. |
+| A different first-person camera position, a crouch eye height, an aim view | Move `FirstPersonCameraAnchor`, or add a camera profile and switch to it (`GetCameraManager()->SwitchToCamera`). No character code. See `Docs/CameraSystem/`. |
+| A visible body in first person | Set `Attach Socket Name` (for example `head`) on the `FirstPerson` camera profile and set the profile's `Attach Offset` to zero. |
 | A character for a game project | Derive `A<Project>Character : ABaseCharacter` in the game module. Its constructor takes `const FObjectInitializer&` and passes it to `Super`, because the base constructor replaces the movement component class through it. Create the Blueprint from the project class. Hooks, input overrides and an example: `Docs/Integration/Project_Integration_Guide.md`, section 5.1. |
 | Project-specific input (interact, fire) | Add a project mapping context and bind the actions in the project character's `SetupPlayerInputComponent` override, after `Super`. The framework context is untouched. |
 | Input that works without a pawn (pause, menus) | The project PlayerController, section 5.5. |
@@ -294,7 +332,8 @@ RPCs:
 ## 11. Assumptions and limitations
 
 - Mouse look expects the Look action to deliver Y already negated by the mapping context.
-- Both cameras use the character's control rotation; there is no aim-down-sights or camera shake layer.
+- The camera rig uses the character's control rotation. Aim-down-sights is a camera profile you add; there is no camera shake layer.
+- Switching perspective is an instant cut.
 - Slide and Mantle are hooks only.
 - The framework has no ability or stamina system. Dash and Dodge are limited by cooldowns only.
 - Nothing here was compiled or run in the editor. Follow the checklist in `Character_Blueprint_Setup.md` after the first build.

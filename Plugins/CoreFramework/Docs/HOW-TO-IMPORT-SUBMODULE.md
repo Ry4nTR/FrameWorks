@@ -63,7 +63,7 @@ When new features or fixes are pushed to the `coreframework-branch` from the mai
 Navigate to the root of your game project and run the update command to pull the latest commits from the remote branch.
 
 ```powershell
-git submodule update --remote Plugins/CoreFramework
+git submodule update --remote --merge Plugins/CoreFramework
 ```
 
 ### Step 2: Commit the New Pointer

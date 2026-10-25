@@ -219,6 +219,8 @@ Jumping plays JumpStart then JumpLoop. Walking off a ledge (`bIsRising` false) g
 
 The arms Animation Blueprint reads the same variables, because its owner is the same character.
 
+A pure first-person project (no body mesh, no head socket) needs only `ABP_FirstPersonArms`. `ABP_Character` is for a visible body, and it is also the Animation Blueprint of any mesh a head-socket camera rides on.
+
 ## Step 11 - Verify
 
 Play in the editor. In the Animation Blueprint select your character in the **Debug Object** dropdown to see states light up, and run `ShowDebug Animation` for the active values.

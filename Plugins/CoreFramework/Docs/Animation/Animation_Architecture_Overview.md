@@ -1,6 +1,6 @@
 # Animation Framework - Architecture Overview
 
-Target: Unreal Engine 5.8 | Module macro: `FRAMEWORKS_API` | Files: `AnimationInstance.h/.cpp`
+Target: Unreal Engine 5.8 | Module macro: `COREFRAMEWORK_API` | Files: `AnimationInstance.h/.cpp`
 
 ---
 

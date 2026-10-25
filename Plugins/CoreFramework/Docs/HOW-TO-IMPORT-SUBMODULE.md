@@ -29,7 +29,7 @@ git subtree split --prefix=Plugins/CoreFramework -b coreframework-branch
 Push this new branch to your remote repository so it can be accessed by your game projects. **This is a crucial step before attempting to add the submodule elsewhere.**
 
 ```powershell
-git push origin coreframework-branch
+git push origin coreframework-branch --force
 ```
 
 ## 2. Integrating the Plugin into a Game Project

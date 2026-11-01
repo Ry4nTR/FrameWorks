@@ -15,7 +15,8 @@ Feature summary:
 - Exposed state enums for Ground, Fly and Water, plus the raw Gameplay Tags.
 - Upper and lower body separation through a Layered Blend per Bone weight.
 - A root motion switch.
-- A montage API for one-off actions.
+- A montage API for one-off actions, plus a character-level pair that plays an arms montage and a body montage in one replicated call.
+- Arms-only (pure first person), full-body and hybrid characters are all supported configurations.
 
 ---
 
@@ -172,7 +173,7 @@ Functions:
 | Function | Thread-safe | Purpose |
 |---|---|---|
 | `HasActiveTag(Tag)` | yes | Hierarchical tag query for transition and blend rules |
-| `PlayActionMontage`, `StopActionMontage` | no (game thread) | One-off actions |
+| `PlayActionMontage`, `StopActionMontage` | no (game thread) | One-off actions on this Animation Blueprint's mesh (the character calls them for you, section 10) |
 | `SetUpperBodyLayerAllowed(bool)` | no (game thread) | Runtime switch for the upper-body layer |
 
 ---
@@ -239,7 +240,7 @@ Guidance:
 
 ## 10. Montages (one-off actions)
 
-Locomotion states describe what the character is *doing continuously*; montages describe things that *happen* (attack, interact, hit reaction).
+Locomotion states describe what the character is *doing continuously*; montages describe things that *happen* (attack, interact, grab, hit reaction).
 
 ```
 PlayActionMontage(Montage, PlayRate, StartSection)  -->  returns duration (0 = failed)
@@ -247,9 +248,29 @@ OnActionMontageEnded(Montage, bInterrupted)         -->  fires when it finishes 
 StopActionMontage(Montage or null, BlendOutTime)
 ```
 
+These three belong to one Animation Blueprint, so they act on one mesh. A character that has an arms mesh and a body mesh uses the character-level pair instead, which calls them on the right meshes and replicates:
+
+```
+ABaseCharacter::PlayActionMontages(FirstPersonMontage, BodyMontage, PlayRate, StartSection)
+ABaseCharacter::StopActionMontages(BlendOutTime)
+ABaseCharacter::IsPlayingActionMontage()
+```
+
+Ownership rules (full version with slots and workflow: `Animation_Blueprint_Setup.md`, Steps 13 to 18):
+
+| Concern | Owner |
+|---|---|
+| When an action starts (input, target, validation) | Gameplay code: the project character or an interaction component |
+| Playing, stopping, replicating the montage | `ABaseCharacter::PlayActionMontages`, which calls `UAnimationInstance::PlayActionMontage` |
+| Slots and layer structure | The Animation Blueprint graph, with no interaction logic |
+| Actions that change *how the character moves* (Dash, Roll, Mantle, Slide) | State machine action tags through `RequestAction` |
+| Timing inside the action (commit frame, sound) | Montage notifies |
+
+Interactions are **not** state machine actions: the state machine only accepts tags under the active domain's state root, `MapStateTag` has no pose for a tag it does not know (it falls back to motion), and a running action fades the upper-body layer out, which would hide an `UpperBody` montage.
+
 - Failure causes: null montage, missing slot in the AnimGraph, or a skeleton mismatch. A warning names the montage.
-- Montages in the same Slot Group interrupt each other. Put `UpperBody` and `DefaultSlot` in the same group for one action at a time.
-- Keep action state (`bIsAttacking`) on the character, never in the Animation Blueprint. Use the end delegate to unlock it.
+- Montages in the same Slot Group interrupt each other. `UpperBody` and `DefaultSlot` share `DefaultGroup`, so one action plays at a time.
+- Do not store an "is interacting" flag. Ask `IsPlayingActionMontage()` when the next input arrives, and use the end delegate only to restore things.
 
 ---
 

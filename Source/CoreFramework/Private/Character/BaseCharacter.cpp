@@ -3,6 +3,8 @@
 
 #include "Character/BaseCharacter.h"
 
+#include "Animation/AnimationInstance.h"
+#include "Animation/AnimMontage.h"
 #include "Camera/CameraComponent.h"
 #include "CameraSystem/CameraManagerComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -609,6 +611,184 @@ void ABaseCharacter::ServerRequestAction_Implementation(FGameplayTag ActionTag, 
 		// The state machine rejects tags that do not belong to the active domain.
 		StateMachine->BeginAction(ActionTag, FMath::Clamp(Duration, -1.0f, 10.0f));
 	}
+}
+
+// ----------------------------------------------------------------------
+// Action montages (one-off animations)
+// ----------------------------------------------------------------------
+
+namespace
+{
+	/** Plays a montage on one mesh through its AnimationInstance. Returns 0 when the mesh, the instance or the play is missing. */
+	float PlayMontageOnMesh(USkeletalMeshComponent* Mesh, UAnimMontage* Montage, float PlayRate, FName StartSection)
+	{
+		if (!Mesh || !Montage)
+		{
+			return 0.0f;
+		}
+
+		// A mesh without a mesh asset (pure first person body) has no Animation Blueprint: nothing to play, nothing to report.
+		UAnimInstance* AnimInstance = Mesh->GetAnimInstance();
+		if (!AnimInstance)
+		{
+			return 0.0f;
+		}
+
+		if (UAnimationInstance* FrameworkInstance = Cast<UAnimationInstance>(AnimInstance))
+		{
+			return FrameworkInstance->PlayActionMontage(Montage, PlayRate, StartSection);
+		}
+
+		UE_LOG(LogBaseCharacter, Warning, TEXT("%s: the Animation Blueprint of %s does not derive from AnimationInstance, so the montage %s was not played."),
+			*GetNameSafe(Mesh->GetOwner()), *GetNameSafe(Mesh), *GetNameSafe(Montage));
+		return 0.0f;
+	}
+
+	void StopMontagesOnMesh(USkeletalMeshComponent* Mesh, float BlendOutTime)
+	{
+		if (!Mesh)
+		{
+			return;
+		}
+
+		if (UAnimationInstance* FrameworkInstance = Cast<UAnimationInstance>(Mesh->GetAnimInstance()))
+		{
+			FrameworkInstance->StopActionMontage(nullptr, BlendOutTime);
+		}
+	}
+}
+
+float ABaseCharacter::PlayActionMontages(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection)
+{
+	// Simulated proxies mirror what the owner or the server sends.
+	if (GetLocalRole() == ROLE_SimulatedProxy || (!FirstPersonMontage && !BodyMontage))
+	{
+		return 0.0f;
+	}
+
+	const float Duration = PlayActionMontagesLocal(FirstPersonMontage, BodyMontage, PlayRate, StartSection);
+	if (Duration <= 0.0f)
+	{
+		// Nothing started here (missing slot, skeleton mismatch, no mesh). The warning in LogFrameworksAnimation says why.
+		return 0.0f;
+	}
+
+	if (HasAuthority())
+	{
+		// Server, listen-server host or standalone: every other machine plays it, the owning client included.
+		MulticastPlayActionMontages(FirstPersonMontage, BodyMontage, PlayRate, StartSection, /*bSkipOwner=*/false);
+	}
+	else if (IsLocallyControlled())
+	{
+		ServerPlayActionMontages(FirstPersonMontage, BodyMontage, PlayRate, StartSection);
+	}
+
+	return Duration;
+}
+
+void ABaseCharacter::StopActionMontages(float BlendOutTime)
+{
+	if (GetLocalRole() == ROLE_SimulatedProxy)
+	{
+		return;
+	}
+
+	StopActionMontagesLocal(BlendOutTime);
+
+	if (HasAuthority())
+	{
+		MulticastStopActionMontages(BlendOutTime, /*bSkipOwner=*/false);
+	}
+	else if (IsLocallyControlled())
+	{
+		ServerStopActionMontages(BlendOutTime);
+	}
+}
+
+bool ABaseCharacter::IsPlayingActionMontage() const
+{
+	const UAnimInstance* ArmsInstance = FirstPersonMesh ? FirstPersonMesh->GetAnimInstance() : nullptr;
+	if (ArmsInstance && ArmsInstance->IsAnyMontagePlaying())
+	{
+		return true;
+	}
+
+	const USkeletalMeshComponent* BodyMesh = GetMesh();
+	const UAnimInstance* BodyInstance = BodyMesh ? BodyMesh->GetAnimInstance() : nullptr;
+	return BodyInstance && BodyInstance->IsAnyMontagePlaying();
+}
+
+float ABaseCharacter::PlayActionMontagesLocal(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection)
+{
+	float Duration = 0.0f;
+
+	// Arms: only on the machine that shows them. Every other machine would animate a mesh nobody sees.
+	if (IsLocallyControlled())
+	{
+		Duration = FMath::Max(Duration, PlayMontageOnMesh(FirstPersonMesh, FirstPersonMontage, PlayRate, StartSection));
+	}
+
+	// Body: every machine, so other players see the action. It also keeps a hidden body (first person) in step with the arms.
+	Duration = FMath::Max(Duration, PlayMontageOnMesh(GetMesh(), BodyMontage, PlayRate, StartSection));
+
+	return Duration;
+}
+
+void ABaseCharacter::StopActionMontagesLocal(float BlendOutTime)
+{
+	StopMontagesOnMesh(FirstPersonMesh, BlendOutTime);
+	StopMontagesOnMesh(GetMesh(), BlendOutTime);
+}
+
+void ABaseCharacter::ServerPlayActionMontages_Implementation(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection)
+{
+	// The montages are cosmetic, but the rate comes from a client, so it is clamped like every other client value.
+	const float SafePlayRate = FMath::Clamp(PlayRate, 0.1f, 5.0f);
+
+	PlayActionMontagesLocal(FirstPersonMontage, BodyMontage, SafePlayRate, StartSection);
+
+	// The owner already played it when it asked.
+	MulticastPlayActionMontages(FirstPersonMontage, BodyMontage, SafePlayRate, StartSection, /*bSkipOwner=*/true);
+}
+
+void ABaseCharacter::MulticastPlayActionMontages_Implementation(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection, bool bSkipOwner)
+{
+	// The server played it before sending.
+	if (HasAuthority())
+	{
+		return;
+	}
+
+	// The owning client played it when it asked.
+	if (bSkipOwner && IsLocallyControlled())
+	{
+		return;
+	}
+
+	PlayActionMontagesLocal(FirstPersonMontage, BodyMontage, PlayRate, StartSection);
+}
+
+void ABaseCharacter::ServerStopActionMontages_Implementation(float BlendOutTime)
+{
+	const float SafeBlendOutTime = FMath::Clamp(BlendOutTime, 0.0f, 5.0f);
+
+	StopActionMontagesLocal(SafeBlendOutTime);
+	MulticastStopActionMontages(SafeBlendOutTime, /*bSkipOwner=*/true);
+}
+
+void ABaseCharacter::MulticastStopActionMontages_Implementation(float BlendOutTime, bool bSkipOwner)
+{
+	if (HasAuthority())
+	{
+		return;
+	}
+
+	if (bSkipOwner && IsLocallyControlled())
+	{
+		return;
+	}
+
+	StopActionMontagesLocal(BlendOutTime);
 }
 
 void ABaseCharacter::HandleMovementActionStarted(EMovementAction Action, EMovementDomain Domain, float Duration)

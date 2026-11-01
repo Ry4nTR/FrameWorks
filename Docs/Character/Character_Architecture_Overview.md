@@ -274,6 +274,18 @@ Duration comes from the movement component's `StateDuration` for that action.
 
 Slide and Mantle have tags and animation support but no built-in trigger. Your game logic decides when they happen and calls `RequestAction`.
 
+### 7.6 Action montages (grab, inspect, hit reaction)
+
+One-off animations that are not movement states go through three functions on the character, not through `RequestAction`:
+
+| Function | Purpose |
+|---|---|
+| `PlayActionMontages(FirstPersonMontage, BodyMontage, PlayRate, StartSection)` | Plays the arms montage on `FirstPersonMesh` (owner only) and the body montage on `Mesh` (everyone). Pass null for a mesh that has no montage. Returns the longest duration, 0 if nothing started. |
+| `StopActionMontages(BlendOutTime)` | Stops both, on every machine. |
+| `IsPlayingActionMontage()` | True while any montage plays on this machine. Use it to gate the next input. |
+
+Call them on the locally controlled character or on the server. The owner plays at once; the server plays the body montage and forwards both calls to the other machines with reliable multicasts (rate and blend-out clamped on the server). Simulated proxies ignore the call. A mesh without a mesh asset or Animation Blueprint is skipped silently, so the same call works for a pure first-person, a full-body and a hybrid character. Setup, slots and the trigger workflow: `Docs/Animation/Animation_Blueprint_Setup.md`, Steps 13 to 18.
+
 ---
 
 ## 8. Multiplayer model
@@ -294,6 +306,8 @@ RPCs:
 |---|---|---|---|
 | `ServerSetPerspective` | Reliable | Owning client | Keep the server's rotation policy in sync |
 | `ServerRequestAction` | Reliable | Owning client | Let the server start and replicate a gameplay action |
+| `ServerPlayActionMontages`, `ServerStopActionMontages` | Reliable | Owning client | Let the server play or stop the body montage and forward it |
+| `MulticastPlayActionMontages`, `MulticastStopActionMontages` | Reliable | Server | Show or stop the action on every other machine (the owner is skipped when it already played) |
 
 ---
 
@@ -324,6 +338,7 @@ RPCs:
 | A different first-person camera position, a crouch eye height, an aim view | Move `FirstPersonCameraAnchor`, or add a camera profile and switch to it (`GetCameraManager()->SwitchToCamera`). No character code. See `Docs/CameraSystem/`. |
 | A visible body in first person | Set `Attach Socket Name` (for example `head`) on the `FirstPerson` camera profile and set the profile's `Attach Offset` to zero. |
 | A character for a game project | Derive `A<Project>Character : ABaseCharacter` in the game module. Its constructor takes `const FObjectInitializer&` and passes it to `Super`, because the base constructor replaces the movement component class through it. Create the Blueprint from the project class. Hooks, input overrides and an example: `Docs/Integration/Project_Integration_Guide.md`, section 5.1. |
+| A one-off animation (grab, inspect, hit reaction) | Author an arms montage and a body montage, then call `PlayActionMontages` from your own logic. No character change, no Animation Blueprint logic. See section 7.6. |
 | Project-specific input (interact, fire) | Add a project mapping context and bind the actions in the project character's `SetupPlayerInputComponent` override, after `Super`. The framework context is untouched. |
 | Input that works without a pawn (pause, menus) | The project PlayerController, section 5.5. |
 

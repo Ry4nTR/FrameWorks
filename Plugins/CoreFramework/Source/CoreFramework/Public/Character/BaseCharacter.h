@@ -35,6 +35,13 @@
 //                            exists (a visible body with an animated view). The "ThirdPerson" profile attaches to the
 //                            capsule.
 //
+// ACTION MONTAGES (one-off animations: grab, inspect, hit reaction ...)
+//   PlayActionMontages plays one montage on the arms (FirstPersonMesh, owner only) and one on the body (Mesh) in a
+//   single call, because each skeleton needs its own montage asset. A pure first-person character passes only the arms
+//   montage, a full-body character only the body montage, a hybrid character both. The owner plays at once, the server
+//   plays the body montage and forwards it to every other machine. Gameplay decides WHEN; this class only plays.
+//   The Animation Blueprint stays free of interaction logic: it just owns the slots (see Animation_Blueprint_Setup.md).
+//
 // PERSPECTIVE
 //   The perspective (first or third person) is character state: it is replicated and it selects the rotation policy
 //   of the movement component. This class maps it to a camera profile name and leaves everything else to the
@@ -51,6 +58,7 @@
 #include "InputActionValue.h"
 #include "BaseCharacter.generated.h"
 
+class UAnimMontage;
 class USceneComponent;
 class USkeletalMeshComponent;
 class UCameraManagerComponent;
@@ -205,6 +213,35 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Character")
 	UCameraManagerComponent* GetCameraManager() const { return CameraManager; }
 
+	// ------------------------------------------------------------------
+	// Action montages (one-off animations)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Plays a one-off montage pair. Pass null for a mesh that has no montage (a pure first-person character passes only
+	 * FirstPersonMontage, a full-body character only BodyMontage).
+	 *
+	 *   FirstPersonMontage  plays on FirstPersonMesh, only on the machine that owns the view.
+	 *   BodyMontage         plays on Mesh, on every machine, so other players see the action.
+	 *
+	 * Call it on the locally controlled character (it plays at once and the server is informed) or on the server
+	 * (it plays and is forwarded to every machine, the owner included). Simulated proxies ignore the call, they mirror.
+	 * A mesh without a mesh asset or without an Animation Blueprint is skipped. The montage slot must exist in that
+	 * Animation Blueprint, otherwise a warning is logged by LogFrameworksAnimation.
+	 *
+	 * @return Duration in seconds of the longest montage that started on this machine, or 0 if none started.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Character|Animation")
+	float PlayActionMontages(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate = 1.0f, FName StartSection = NAME_None);
+
+	/** Stops every montage on the arms and the body, on every machine. Same calling rules as PlayActionMontages. */
+	UFUNCTION(BlueprintCallable, Category = "Character|Animation")
+	void StopActionMontages(float BlendOutTime = 0.2f);
+
+	/** True while any montage plays on the arms or the body of this machine. Use it to gate a new action instead of storing a flag. */
+	UFUNCTION(BlueprintPure, Category = "Character|Animation")
+	bool IsPlayingActionMontage() const;
+
 protected:
 	// Input handlers. Override to change behavior; each is bound only when its action is set in InputConfig.
 	virtual void Input_Move(const FInputActionValue& Value);
@@ -231,6 +268,25 @@ private:
 
 	UFUNCTION(Server, Reliable)
 	void ServerRequestAction(FGameplayTag ActionTag, float Duration);
+
+	UFUNCTION(Server, Reliable)
+	void ServerPlayActionMontages(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection);
+
+	/** bSkipOwner is true when the owning client already played the montage when it asked. */
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayActionMontages(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection, bool bSkipOwner);
+
+	UFUNCTION(Server, Reliable)
+	void ServerStopActionMontages(float BlendOutTime);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastStopActionMontages(float BlendOutTime, bool bSkipOwner);
+
+	/** Plays on this machine only. Returns the longest duration that started. */
+	float PlayActionMontagesLocal(UAnimMontage* FirstPersonMontage, UAnimMontage* BodyMontage, float PlayRate, FName StartSection);
+
+	/** Stops on this machine only. */
+	void StopActionMontagesLocal(float BlendOutTime);
 
 	UFUNCTION()
 	void OnRep_ActivePerspective(ECharacterPerspective OldPerspective);

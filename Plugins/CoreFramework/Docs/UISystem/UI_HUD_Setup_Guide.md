@@ -749,6 +749,8 @@ This is the most complex example; each part has one job.
 
 *What happens at runtime: when the menu opens it reads the tab set, loads the tab page classes in the background, creates one `WBP_Button_Tab` per tab (label = Display Name), puts each page into `TabSwitcher`, and selects the first tab.*
 
+> **Ready-made tab parents from the Save System.** Two tab pages need no framework-side scripting: `SaveSlotsTabWidget` (the "load / save / delete a slot" page, for the main menu or the pause menu) and `SaveProfileTabWidget` (a settings page whose values are stored in the player's profile and that plugs into the Apply / Revert buttons of this menu). Create their Blueprint children and register them in the tab set like any other tab. Step by step: `Docs/SaveSystem/Save_Engine_Setup.md`, steps B5 and B6. To make a tab refresh when it is selected from C++, `UBaseTabWidget::NotifyTabSelected` is virtual.
+
 ## 4.5 A popup: `WBP_Popup_Confirm`
 
 1. In `Popups` create a Widget Blueprint with parent **BaseActivatableWidget** (a popup is not a menu), name `WBP_Popup_Confirm`.

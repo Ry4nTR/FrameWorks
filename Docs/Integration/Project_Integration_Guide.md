@@ -116,6 +116,17 @@ UUIFrameSubsystem (ULocalPlayerSubsystem) <-- ABaseHUD::BeginPlay               
 * **Calling it:** from C++ and Blueprints with `UAudioFunctionLibrary` (world-context nodes), for example `UAudioFunctionLibrary::PlayMusic(this, CueTag)`.
 * **References:** `Docs/AudioSystem/Audio_Engine_Setup.md` (editor setup, step by step) and `Docs/AudioSystem/Audio_Architecture_Overview.md` (design and network model).
 
+### 2.7 Save system
+
+* **`USaveSubsystem`** is a `UGameInstanceSubsystem`: the engine creates it for whatever `U<Project>GameInstance` the project uses. **Nothing is plugged into the GameInstance**; it does not inherit from the framework and holds no save data. This is the rule-3 pattern again.
+* **Two scopes:** World slots (a playthrough: many slots, saved and loaded by the authority only) and Profile (one file per local player: settings, unlocks). A network client gets `NotAuthority` for World operations; a dedicated server has no profile.
+* **Saveable things:** add `USaveableComponent` ("Saveable") to an actor and tick **Save Game** on its variables, or implement `ISaveableInterface` on any object and call `RegisterSaveable` / `UnregisterSaveable`. Registering restores the object from the active slot at once, so "load the slot, then open its level" needs no ordering code.
+* **Async, slots, versions:** all operations are asynchronous and queued; slots carry metadata (name, time, playtime, map, game labels); `CurrentSaveVersion` in **Project Settings → CoreFramework → CoreFramework Save** plus `USaveMigrationStep` assets keep old saves loadable.
+* **Game extension:** a `USaveHooks` child (labels in the slot list, save restrictions), never a subclass of the subsystem.
+* **UI:** `USaveSlotsTabWidget` (load / save / delete page, a tab of `UBaseMenuWidget`), `USaveSlotEntryWidget` (its row) and `USaveProfileTabWidget` (settings pages with Apply / Revert stored in the profile) are ready parents; the game supplies the look and any child behaviour.
+* **Calling it:** `USaveFunctionLibrary` nodes (world context only) or `USaveSubsystem`, for example `USaveSubsystem::Get(this)->LoadSlot(Name, Callback)`.
+* **References:** `Docs/SaveSystem/Save_Engine_Setup.md` (step by step, what is done once in the framework repo vs per game) and `Docs/SaveSystem/Save_Architecture_Overview.md` (design, serialization, versioning, multiplayer).
+
 ---
 
 ## 3. Step-by-step new project setup
@@ -204,6 +215,7 @@ Create `IA_Pause` (*Input → Input Action*, value type **Digital (bool)**, no t
 | `viewport client` | **Game Viewport Client Class** | `CommonGameViewportClient` (restart when asked) |
 | `Common Input` | **Input Data** | `BP_CommonInputData` (plugin asset) |
 | `CoreFramework UI` | **Default UI Config** | `DA_UIConfig` (your asset, created with `UI_HUD_Setup_Guide.md` 3.6) |
+| `CoreFramework Save` | **Current Save Version** | `1` to start (raise it when a release changes saves in a way old files cannot load; see `Docs/SaveSystem/Save_Engine_Setup.md` B1 and B8). Optional: defaults work |
 | `CoreFramework Audio` | **Default Audio Config** | `DA_AudioConfig` (your copy of the plugin asset `DA_AudioConfig_Template`, step 3 of `Docs/AudioSystem/Audio_Engine_Setup.md`; optional until the game has sounds) |
 | `game instance` | **Game Instance Class** | `BP_GameInstance` |
 | `Game Default Map`, `Default GameMode` | **Game Default Map**, **Default GameMode** | the main-menu map, `BP_GameMode_Gameplay` |

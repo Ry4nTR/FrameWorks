@@ -26,9 +26,12 @@ public:
 	/** Called once by the hosting menu right after creation. */
 	void InitializeTab(const FUITabDescriptor& InDescriptor);
 
-	/** Called by the hosting menu when this tab becomes / stops being the visible tab. */
-	void NotifyTabSelected();
-	void NotifyTabDeselected();
+	/**
+	 * Called by the hosting menu when this tab becomes / stops being the visible tab.
+	 * Virtual so that C++ tab classes (for example the save slots tab) can react; Blueprints use the On Tab Selected events.
+	 */
+	virtual void NotifyTabSelected();
+	virtual void NotifyTabDeselected();
 
 	UFUNCTION(BlueprintPure, Category = "Base UI|Tab")
 	FName GetTabId() const { return Descriptor.TabId; }

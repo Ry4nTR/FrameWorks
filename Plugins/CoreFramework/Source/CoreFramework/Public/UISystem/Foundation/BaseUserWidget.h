@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "CommonUserWidget.h"
+#include "GameplayTagContainer.h"
 #include "Engine/DataTable.h"
 #include "Input/UIActionBindingHandle.h"
 #include "UISystem/Binding/BaseUIBinderInterface.h"
@@ -69,6 +70,12 @@ public:
 	/** True while the last used input device on this local player is a gamepad. */
 	UFUNCTION(BlueprintPure, Category = "Base UI|Input")
 	bool IsUsingGamepad() const;
+
+	// ---- Audio -----------------------------------------------------------------------------------
+
+	/** Plays a cue of the audio config on the UI category (custom clicks, confirmations, errors). Local to this machine. */
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Audio")
+	void PlayUISound(FGameplayTag CueTag);
 
 	// ---- Input binding helpers -------------------------------------------------------------------
 

@@ -5,6 +5,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Input/CommonUIInputTypes.h"
 #include "UISystem/Manager/UIFrameSubsystem.h"
+#include "AudioSystem/Manager/AudioFrameSubsystem.h"
 
 UBaseUserWidget::UBaseUserWidget(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -141,6 +142,14 @@ FUIActionBindingHandle UBaseUserWidget::BindUIActionNative(const FDataTableRowHa
 {
 	FBindUIActionArgs BindArgs(ActionRow, bShowInActionBar, OnExecuted);
 	return RegisterUIActionBinding(BindArgs);
+}
+
+void UBaseUserWidget::PlayUISound(FGameplayTag CueTag)
+{
+	if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
+	{
+		Audio->PlayUICue(CueTag);
+	}
 }
 
 void UBaseUserWidget::BindUIAction(const FDataTableRowHandle& ActionRow, bool bShowInActionBar, FBaseUIActionDelegate OnExecuted)

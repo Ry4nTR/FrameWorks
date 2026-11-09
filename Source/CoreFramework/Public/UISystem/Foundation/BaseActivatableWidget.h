@@ -83,6 +83,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Base UI|Input")
 	bool IsUsingGamepad() const;
 
+	/** Plays a cue of the audio config on the UI category (custom clicks, confirmations, errors). Local to this machine. */
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Audio")
+	void PlayUISound(FGameplayTag CueTag);
+
 	/** Moves keyboard / gamepad focus to the default focus widget now. */
 	UFUNCTION(BlueprintCallable, Category = "Base UI|Input")
 	void RequestDefaultFocus();
@@ -127,6 +131,23 @@ protected:
 	/** Optional widget named exactly DefaultFocusWidget. Receives focus on activation. */
 	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UWidget> DefaultFocusWidget;
+
+	// ---- Audio -----------------------------------------------------------------------------------
+
+	/** Cue played when the screen opens (popups, menus). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	FGameplayTag ActivatedCue;
+
+	/** Cue played when the screen closes. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	FGameplayTag DeactivatedCue;
+
+	/**
+	 * When a cue above is empty, use the project default (Default Screen Open / Close Cue of the audio config).
+	 * Off by default so that the gameplay HUD, which is also a screen, stays silent. Tick it on menus and popups.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	bool bUseDefaultScreenCues = false;
 
 	// ---- Binding ---------------------------------------------------------------------------------
 

@@ -5,6 +5,7 @@
 
 #include "Animation/AnimationInstance.h"
 #include "Animation/AnimMontage.h"
+#include "AudioSystem/Components/AudioEmitterComponent.h"
 #include "Camera/CameraComponent.h"
 #include "CameraSystem/CameraManagerComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -128,6 +129,9 @@ ABaseCharacter::ABaseCharacter(const FObjectInitializer& ObjectInitializer)
 
 	// State machine (replicates its own properties).
 	StateMachine = CreateDefaultSubobject<UStateMachineComponent>(TEXT("StateMachine"));
+
+	// Audio: replicated sound events and loops. Playback itself is local (UAudioFrameSubsystem).
+	AudioEmitter = CreateDefaultSubobject<UAudioEmitterComponent>(TEXT("AudioEmitter"));
 }
 
 void ABaseCharacter::PostInitializeComponents()

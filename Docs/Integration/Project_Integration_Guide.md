@@ -107,6 +107,15 @@ UUIFrameSubsystem (ULocalPlayerSubsystem) <-- ABaseHUD::BeginPlay               
 * **`UUIFrameSubsystem`** is a `ULocalPlayerSubsystem`: it owns the root layout, the screen registry and the binding hub that tells widgets when the controller, player state and pawn change. Its lifetime is the lifetime of the HUD actor, so **screens do not survive map travel** (every map type needs a GameMode whose `HUD Class` is set).
 * **References:** `Docs/UISystem/UI_HUD_Setup_Guide.md` (step by step) and `Docs/UISystem/UI_HUD_System_Architecture.md` (internals).
 
+### 2.6 Audio system
+
+* **`UAudioFrameSubsystem`** is a `UGameInstanceSubsystem` (no project class needed, no `UGameInstance` subclass): it plays sounds on the local machine, owns category volumes (Master, SFX, Music, Ambient, UI) and the crossfaded music and ambient layers, and keeps music playing across map travel. On a dedicated server it creates no audio objects.
+* **Data, not code:** one `UAudioConfigDataAsset` (`DA_AudioConfig`, assigned in **Project Settings → CoreFramework → CoreFramework Audio**) holds the Sound Class of each category and the cue library (cue tag → sound asset + category + variation). Game code only knows cue tags, which the project creates (`Audio.Cue.*`).
+* **Multiplayer:** playback is always local. `UAudioEmitterComponent` replicates sound events and looping state (`ABaseCharacter` already has one as `AudioEmitter`; add it to any other actor, the GameState included for shared music). Animation-driven sounds use the **Play Audio Cue** anim notify, which needs no networking.
+* **UI:** `UBaseButton`, `UBaseActivatableWidget` and `UBaseUserWidget` play UI cues by themselves once the default UI cues are set in the config.
+* **Calling it:** from C++ and Blueprints with `UAudioFunctionLibrary` (world-context nodes), for example `UAudioFunctionLibrary::PlayMusic(this, CueTag)`.
+* **References:** `Docs/AudioSystem/Audio_Engine_Setup.md` (editor setup, step by step) and `Docs/AudioSystem/Audio_Architecture_Overview.md` (design and network model).
+
 ---
 
 ## 3. Step-by-step new project setup
@@ -195,6 +204,7 @@ Create `IA_Pause` (*Input → Input Action*, value type **Digital (bool)**, no t
 | `viewport client` | **Game Viewport Client Class** | `CommonGameViewportClient` (restart when asked) |
 | `Common Input` | **Input Data** | `BP_CommonInputData` (plugin asset) |
 | `CoreFramework UI` | **Default UI Config** | `DA_UIConfig` (your asset, created with `UI_HUD_Setup_Guide.md` 3.6) |
+| `CoreFramework Audio` | **Default Audio Config** | `DA_AudioConfig` (your copy of the plugin asset `DA_AudioConfig_Template`, step 3 of `Docs/AudioSystem/Audio_Engine_Setup.md`; optional until the game has sounds) |
 | `game instance` | **Game Instance Class** | `BP_GameInstance` |
 | `Game Default Map`, `Default GameMode` | **Game Default Map**, **Default GameMode** | the main-menu map, `BP_GameMode_Gameplay` |
 

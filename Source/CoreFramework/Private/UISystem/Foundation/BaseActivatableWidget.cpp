@@ -9,6 +9,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 #include "UISystem/Manager/UIFrameSubsystem.h"
+#include "AudioSystem/Core/AudioTypes.h"
+#include "AudioSystem/Manager/AudioFrameSubsystem.h"
 
 UBaseActivatableWidget::UBaseActivatableWidget(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -86,6 +88,16 @@ void UBaseActivatableWidget::NativeOnActivated()
 {
 	Super::NativeOnActivated();
 
+	// bScreenOpen is true only for the first activation after the push. CommonUI also re-activates a screen that was
+	// covered by another one on the same stack; that must not play the open sound again.
+	if (bScreenOpen && (ActivatedCue.IsValid() || bUseDefaultScreenCues))
+	{
+		if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
+		{
+			Audio->PlayUIEvent(EAudioUIEvent::ScreenOpen, ActivatedCue);
+		}
+	}
+
 	ApplyActiveSideEffects();
 
 	if (Anim_Activate)
@@ -99,6 +111,14 @@ void UBaseActivatableWidget::NativeOnActivated()
 void UBaseActivatableWidget::NativeOnDeactivated()
 {
 	ReleaseActiveSideEffects();
+
+	if (bScreenOpen && (DeactivatedCue.IsValid() || bUseDefaultScreenCues))
+	{
+		if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
+		{
+			Audio->PlayUIEvent(EAudioUIEvent::ScreenClose, DeactivatedCue);
+		}
+	}
 	bScreenOpen = false;
 
 	if (Anim_Deactivate)
@@ -239,6 +259,14 @@ FUIActionBindingHandle UBaseActivatableWidget::BindUIActionNative(const FDataTab
 {
 	FBindUIActionArgs BindArgs(ActionRow, bShowInActionBar, OnExecuted);
 	return RegisterUIActionBinding(BindArgs);
+}
+
+void UBaseActivatableWidget::PlayUISound(FGameplayTag CueTag)
+{
+	if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
+	{
+		Audio->PlayUICue(CueTag);
+	}
 }
 
 void UBaseActivatableWidget::BindUIAction(const FDataTableRowHandle& ActionRow, bool bShowInActionBar, FBaseUIActionDelegate OnExecuted)

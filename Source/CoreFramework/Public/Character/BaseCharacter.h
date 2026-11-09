@@ -7,6 +7,7 @@
 //     UCameraManagerComponent          camera rig, profiles, blending, FOV, zoom and look input
 //     UStateMachineComponent           Gameplay Tag state store (this class is its driver)
 //     UInputConfigData                 input actions
+//     UAudioEmitterComponent           replicated sound events and loops (the audio system's network layer)
 //   Data flow each frame:  Movement -> ABaseCharacter::UpdateStateMachine -> StateMachine -> AnimationInstance.
 //   Remove the state machine or use another movement component and the character still runs; only the parts that
 //   depend on the missing piece are skipped.
@@ -59,6 +60,7 @@
 #include "BaseCharacter.generated.h"
 
 class UAnimMontage;
+class UAudioEmitterComponent;
 class USceneComponent;
 class USkeletalMeshComponent;
 class UCameraManagerComponent;
@@ -127,6 +129,14 @@ public:
 	/** Owns the camera rig. Tune cameras in its CameraProfiles map. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
 	TObjectPtr<UCameraManagerComponent> CameraManager;
+
+	/**
+	 * Replicates sound events and looping sounds of this character (voice lines, abilities, an engine loop ...).
+	 * Footsteps and other animation-driven sounds do not need it: use the Play Audio Cue anim notify, which runs
+	 * locally on every machine. See Docs/AudioSystem.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Character|Components")
+	TObjectPtr<UAudioEmitterComponent> AudioEmitter;
 
 	// ------------------------------------------------------------------
 	// Configuration

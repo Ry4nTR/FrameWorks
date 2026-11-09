@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "CommonButtonBase.h"
+#include "GameplayTagContainer.h"
 #include "BaseButton.generated.h"
 
 class UCommonTextBlock;
@@ -16,6 +17,10 @@ class UCommonTextBlock;
  *  - Change it at runtime with SetButtonLabel.
  * Appearance (colors, hover, pressed, selected) comes from the CommonButtonStyle asset the Blueprint
  * references. The framework ships no style and no art.
+ *
+ * Sounds: hover and click play through the audio system (UAudioFrameSubsystem, UI category). Each button can name its
+ * own cues; an empty cue uses the project default of the audio config. Leave the Hovered / Clicked sound slots of the
+ * CommonUI button style empty, otherwise a second sound plays next to this one.
  */
 UCLASS(Abstract, Blueprintable)
 class COREFRAMEWORK_API UBaseButton : public UCommonButtonBase
@@ -31,6 +36,20 @@ public:
 
 protected:
 	virtual void NativePreConstruct() override;
+	virtual void NativeOnHovered() override;
+	virtual void NativeOnClicked() override;
+
+	/** Cue played on hover. Empty uses Default Button Hover Cue of the audio config. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	FGameplayTag HoverCue;
+
+	/** Cue played on click. Empty uses Default Button Click Cue of the audio config. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	FGameplayTag ClickCue;
+
+	/** No sounds at all for this button (neither its own cues nor the project defaults). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	bool bSilent = false;
 
 	/** Fired whenever the label text is applied (designer preview, construct, SetButtonLabel). */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Base UI|Button", meta = (DisplayName = "On Button Label Changed"))

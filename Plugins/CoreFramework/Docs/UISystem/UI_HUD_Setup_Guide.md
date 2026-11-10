@@ -463,6 +463,7 @@ Content/UI/
 │     └─ Tabs/      WBP_Tab_Graphics, WBP_Tab_Audio, WBP_Tab_Controls
 ├─ Popups/          WBP_Popup_Confirm …
 └─ Components/
+   ├─ TabList/      WBP_TabList
    ├─ Buttons/      WBP_Button_Primary, WBP_Button_Tab
    │  └─ Styles/    BP_ButtonStyle_Primary, BP_ButtonStyle_Tab
    └─ Text/         BP_TextStyle_Button …
@@ -481,6 +482,7 @@ What each folder is for:
 | `Menus/<Name>/` | One folder per menu, containing that menu's widget. | Each time you add a menu (4.2–4.4). | `BaseMenuWidget` | `WBP_MainMenu` |
 | `Menus/Settings/Tabs/` | One widget per tab page of the settings menu. | Each time you add a settings category. | `BaseTabWidget` | `WBP_Tab_Graphics` |
 | `Popups/` | Dialogs and other screens that appear **over** a menu. | Each time you add a popup (4.5). | `BaseActivatableWidget` | `WBP_Popup_Confirm` |
+| `Components/TabList/` | The row of tab buttons used by tabbed menus (`WBP_TabList`). Unreal ships the tab list only as an abstract class, so you build one Blueprint child (4.4 C). | Once per project. | `CommonTabListWidgetBase` (from Unreal's Common UI) | `WBP_TabList` |
 | `Components/Buttons/` | The reusable buttons everything else uses. | Once per project (3.5). | `BaseButton` | `WBP_Button_Primary` |
 | `Components/Buttons/Styles/` | The look of those buttons (colors for normal, hovered, pressed, selected). | Once per project (3.5). | `CommonButtonStyle` | `BP_ButtonStyle_Primary` |
 | `Components/Text/` | The look of texts (font, size, color). | Once per project (3.5). | `CommonTextStyle` | `BP_TextStyle_Button` |
@@ -705,7 +707,31 @@ This is the most complex example; each part has one job.
 
    *Why a data asset: adding a "Gameplay" tab later means adding a row, not changing the menu Blueprint. **Tab Id** is the tab's unique name, **Sort Order** decides the order (lower first).*
 
-### C. The menu `WBP_Settings`
+### C. The tab list widget `WBP_TabList` (one-time)
+
+*Why this step exists: in Unreal 5.8 there is no ready-made **Common Tab List** in the palette. Epic only ships the abstract class `CommonTabListWidgetBase`, which keeps track of the tabs and listens for the tab-switch input but does not draw anything. You make a small Blueprint child that provides a place to put the tab buttons. Do it once; every tabbed menu reuses it.*
+
+1. In `Components/TabList` create a Widget Blueprint. In the parent-class picker open **All Classes**, search `CommonTabListWidgetBase` and choose it. Name it `WBP_TabList`.
+   *If it is not in the short list, it is only in All Classes because it is abstract. This is normal.*
+2. **Designer**: a **Horizontal Box** as the root (drag it onto the canvas; delete any default root first). Rename it `ButtonContainer`, tick **Is Variable**. This is where the tab buttons will appear.
+3. **Graph**: in **My Blueprint** hover **Functions**, click **Override**, pick **Handle Tab Creation**:
+   * Drag from the `ButtonContainer` variable → **Add Child** (Horizontal Box). Connect the **Tab Button** pin of the event to **Content**.
+   * *Why: the tab list creates one button per tab, but it never places it anywhere; this node is where you place it.*
+4. Override **Handle Tab Removal** too: **Tab Button → Remove From Parent**.
+   *Why: when the menu is closed and reopened, old buttons are cleaned up and not duplicated.*
+5. **Class Defaults** (toolbar → **Class Defaults**, then search `Tab`):
+
+   | Property | Value | Why |
+   |---|---|---|
+   | **Next Tab Input Action Data** | Data Table = `DT_UI_Actions` (from *CoreFramework Content/UI/Input*), Row Name = `NextTab` | Next tab: gamepad right shoulder, `E`. |
+   | **Previous Tab Input Action Data** | Data Table = `DT_UI_Actions`, Row Name = `PreviousTab` | Previous tab: gamepad left shoulder, `Q`. |
+   | **Auto Listen For Input** | on | Tab switching works as soon as the menu opens. |
+   | **Should Wrap Navigation** | on (optional) | Next on the last tab goes back to the first. |
+
+   *If your project uses Enhanced Input for Common UI, the two **Enhanced Input Action** fields appear under the same heading; you can fill those instead.*
+6. Compile, Save.
+
+### D. The menu `WBP_Settings`
 
 1. In `Menus/Settings` create a Widget Blueprint with parent **BaseMenuWidget**, name `WBP_Settings`.
 2. Layout (Designer):
@@ -714,7 +740,7 @@ This is the most complex example; each part has one job.
    Canvas Panel
    └─ Vertical Box   (Anchors: fill screen, offsets 0)
         ├─ Horizontal Box
-        │    └─ Common Tab List            name: TabList
+        │    └─ WBP_TabList                name: TabList
         ├─ Common Animated Switcher        name: TabSwitcher     (Slot → Size = Fill)
         └─ Horizontal Box
              ├─ WBP_Button_Primary   Button Label "Apply"
@@ -722,21 +748,17 @@ This is the most complex example; each part has one job.
              └─ WBP_Button_Primary   Button Label "Back"
    ```
 
-   * Palette search `Tab List` → drag **Common Tab List**; search `Animated Switcher` → drag **Common Animated Switcher**.
-   * Rename them exactly `TabList` and `TabSwitcher`, tick **Is Variable**.
+   * Palette search `WBP_TabList` (it is in the **User Created** section) → drag it in. Search `Animated Switcher` → drag **Common Animated Switcher** (this one *is* in the palette).
+   * Rename them exactly `TabList` and `TabSwitcher`, tick **Is Variable**. *The framework finds them by these exact names.*
    * Select `TabSwitcher` → Details → **Slot (Vertical Box Slot) → Size** = **Fill**.
      *Why: the tab pages are shown inside the switcher; Fill gives it all the remaining height. The switcher shows one page at a time.*
-3. Select `TabList`. In Details search `Tab Input`:
-   * **Next Tab Input Action Data**: Data Table = `DT_UI_Actions` (it comes from *CoreFramework Content/UI/Input*), Row Name = `NextTab`.
-   * **Previous Tab Input Action Data**: Data Table = `DT_UI_Actions`, Row Name = `PreviousTab`.
-   * Tick **Auto Listen For Input**.
-   *Why: this gives you tab switching with the gamepad shoulder buttons and with `Q` / `E` for free.*
-4. Name the three buttons `ApplyButton`, `RevertButton`, `BackButton`. Do **not** create a `DefaultFocusWidget` in this menu: when it does not exist, the menu focuses the button of the active tab by itself, which is where a gamepad player wants to start.
-5. **Graph** — button events (select button → Details → Events → **On Clicked +**):
+   * Do **not** set anything on `TabList` in this menu: the tab input was already configured inside `WBP_TabList` (C).
+3. Name the three buttons `ApplyButton`, `RevertButton`, `BackButton`. Do **not** create a `DefaultFocusWidget` in this menu: when it does not exist, the menu focuses the button of the active tab by itself, which is where a gamepad player wants to start.
+4. **Graph** — button events (select button → Details → Events → **On Clicked +**):
    * `ApplyButton` → node **Apply All Tabs**.
    * `RevertButton` → node **Revert All Tabs**.
    * `BackButton` → node **Close Screen**.
-6. **Class Defaults**:
+5. **Class Defaults**:
 
    | Property (search it) | Value | Why |
    |---|---|---|
@@ -745,7 +767,7 @@ This is the most complex example; each part has one job.
    | **Tab Button Class** | `WBP_Button_Tab` | The button the menu creates for each tab. |
    | **Default Tab Set** | `DA_Settings_Tabs` | The list of tabs from B. |
 
-7. Compile, Save.
+6. Compile, Save.
 
 *What happens at runtime: when the menu opens it reads the tab set, loads the tab page classes in the background, creates one `WBP_Button_Tab` per tab (label = Display Name), puts each page into `TabSwitcher`, and selects the first tab.*
 
@@ -1137,7 +1159,7 @@ Always start with *Window → Output Log*, filter `LogCoreUI`.
 - [ ] `BP_Startup_Gameplay`, `BP_Startup_MainMenu`, Game Modes, maps set (3.7)
 
 **GAME PROJECT (per screen)**
-- [ ] `WBP_HUD`, `WBP_MainMenu`, `WBP_PauseMenu`, `WBP_Settings` + tabs, `WBP_Popup_Confirm` built (4.1–4.5)
+- [ ] `WBP_HUD`, `WBP_MainMenu`, `WBP_PauseMenu`, `WBP_Settings` + tabs (including `WBP_TabList`), `WBP_Popup_Confirm` built (4.1–4.5)
 - [ ] All screens listed in `DA_UIConfig` (4.6)
 - [ ] Smoke test passes (4.8)
 - [ ] First gameplay widget bound through `On UI Pawn Bound` (Step 5)

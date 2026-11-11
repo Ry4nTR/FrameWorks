@@ -7,6 +7,8 @@
 
 > **What v2 changes (v3 of the setup guide moves the shared CommonUI assets into the plugin; no C++ changed).** The framework is now strictly **infrastructure**. It ships C++ base classes and three shared **assets** that are identical in every game: the root layout with its four empty layer stacks, the CommonUI UI-actions table and the CommonUI input data Blueprint. It ships no menus, no HUD layout, no styles, no art. Every screen of a game is built **in the game project** from the base parents. The C++ is organised in responsibility folders. Section 10 lists the audit results and every change.
 >
+> **What v2.1 adds (backward compatible).** `UBaseButton` applies the text style of its button state to `LabelText`, highlights on keyboard / gamepad focus and drives an optional `SelectionIndicator` (4.7). New parent `UBaseConfirmPopupWidget` in `Popups/` for yes / no dialogs with a one-call C++ opener (4.7b). No other class changed. Existing buttons whose CommonButtonStyle has **no** text styles set keep their current look (empty slots are ignored); buttons whose style **has** text styles now actually use them — untick `Apply Style Text To Label` on a button Blueprint to keep the old behaviour.
+>
 > **Verification status.** Written against the CommonUI / Enhanced Input / GameplayTags APIs of UE 5.5–5.8 and checked by careful review, but **not compiled** by its author (no engine available there). Appendix A lists every engine API the system touches with the one-line fix if a signature differs in your engine version.
 
 ---
@@ -41,7 +43,8 @@
 │                                  UBaseRootLayoutWidget  ABaseHUD        │   │ WBP_Settings       parent  UBaseMenuWidget                    │
 │ Manager / binding                UUIFrameSubsystem  UUIBindingHub       │   │ WBP_Tab_*          parent  UBaseTabWidget                     │
 │                                  IBaseUIBinderInterface                 │   │ WBP_Button_*       parent  UBaseButton                        │
-│ Data asset CLASSES               UUIConfigDataAsset  UUITabSetDataAsset │   │ WBP_Popup_*        parent  UBaseActivatableWidget             │
+│ Data asset CLASSES               UUIConfigDataAsset  UUITabSetDataAsset │   │ WBP_Popup_*        parent  UBaseConfirmPopupWidget (yes / no) │
+│ Popup parent                     UBaseConfirmPopupWidget                │   │                    or      UBaseActivatableWidget (other)     │
 │ Native ids                       CoreFramework.UI.Layer.*  HUDSlot.Default│  │ BP_Startup_*       parent  ABaseHUD                           │
 │                                                                         │   │ DA_UIConfig, DA_Settings_Tabs   (instances of the data assets)│
 │ Content: WBP_BaseRootLayout, DT_UI_Actions, BP_CommonInputData          │   │ Gameplay tags, styles, fonts, textures, animations            │
@@ -60,7 +63,8 @@ The dependency only goes one way: the game depends on the plugin; the plugin nev
 | Root | `UBaseRootLayoutWidget` | `Layout/` | One per local player. Holds one `UCommonActivatableWidgetStack` per layer. |
 | Screen base | `UBaseActivatableWidget` | `Foundation/` | Anything pushed on a layer. Declares input mode, focus, side effects. |
 | Plain widget base | `UBaseUserWidget` | `Foundation/` | HUD elements, list entries. Show/Hide hook, binding, input helpers. |
-| Button base | `UBaseButton` | `Foundation/` | Parent of every button: label text support on top of CommonUI buttons. |
+| Button base | `UBaseButton` | `Foundation/` | Parent of every button: label text, per-state text style from the button style, focus highlight, optional selection indicator. |
+| Confirm popup | `UBaseConfirmPopupWidget` | `Popups/` | Parent of yes / no dialogs: request (title, message, labels), one answer per request, Back = cancel, `OpenConfirmation` helper. |
 | HUD container | `UBaseHUDWidget` | `HUD/` | Game layer container with named element slots. |
 | Menu | `UBaseMenuWidget` | `Menu/` | Menu screen with an optional data-driven tab bar. |
 | Tab page | `UBaseTabWidget` | `Menu/Tabs/` | Content of one tab; optional Apply / Revert contract. |
@@ -103,6 +107,8 @@ Plugins/CoreFramework/Source/CoreFramework/UISystem/
 │                  parents of everything the game builds
 ├─ HUD/          BaseHUD.h/.cpp  BaseHUDWidget.h/.cpp
 │                  bootstrap actor + HUD container widget
+├─ Popups/       BaseConfirmPopupWidget.h/.cpp
+│                  yes / no dialog parent
 └─ Menu/         BaseMenuWidget.h/.cpp
    └─ Tabs/      BaseTabWidget.h/.cpp
                    menus and their tab pages
@@ -126,10 +132,12 @@ UCommonActivatableWidget
      │    └─ WBP_HUD              (GAME)
      ├─ UBaseMenuWidget ···· menu with optional tab bar
      │    └─ WBP_MainMenu, WBP_PauseMenu, WBP_Settings   (GAME)
-     └─ WBP_Popup_*                                      (GAME, directly on this class)
+     ├─ UBaseConfirmPopupWidget · yes / no request, one answer, Back = cancel
+     │    └─ WBP_Popup_Confirm    (GAME)
+     └─ WBP_Popup_* (other)                              (GAME, directly on this class)
 
 UCommonButtonBase
- └─ UBaseButton ············ label text support
+ └─ UBaseButton ············ label text, per-state text style, focus highlight, SelectionIndicator
       └─ WBP_Button_*, WBP_Button_Tab                    (GAME)
 
 UPrimaryDataAsset ─ UUIConfigDataAsset, UUITabSetDataAsset  ─►  DA_UIConfig, DA_Settings_Tabs   (GAME instances)
@@ -159,7 +167,7 @@ Plugins/CoreFramework/Content/UI/
 │  ├─ PauseMenu/ WBP_PauseMenu                            (parent: UBaseMenuWidget)
 │  └─ Settings/  WBP_Settings                             (parent: UBaseMenuWidget)
 │     └─ Tabs/   WBP_Tab_Graphics, WBP_Tab_Audio …        (parent: UBaseTabWidget)
-├─ Popups/       WBP_Popup_Confirm …                      (parent: UBaseActivatableWidget)
+├─ Popups/       WBP_Popup_Confirm …                      (parent: UBaseConfirmPopupWidget, or UBaseActivatableWidget)
 └─ Components/
    ├─ Buttons/   WBP_Button_Primary, WBP_Button_Tab       (parent: UBaseButton)
    │  └─ Styles/ BP_ButtonStyle_*                         (CommonButtonStyle)
@@ -1007,15 +1015,20 @@ private:
 
 ### 4.7 `Foundation/BaseButton.h` — button parent
 
+v2.1: the label follows the text style of the button state (`bApplyStyleTextToLabel`), keyboard / gamepad focus highlights like the mouse (`bHighlightOnFocus`), optional `SelectionIndicator` widget, `IsHighlighted` / *On Highlight Changed*.
+
 ```cpp
 // CoreFramework UI System - Foundation
 #pragma once
 
 #include "CoreMinimal.h"
 #include "CommonButtonBase.h"
+#include "GameplayTagContainer.h"
 #include "BaseButton.generated.h"
 
 class UCommonTextBlock;
+class UCommonTextStyle;
+class UWidget;
 
 /**
  * Parent class for every button of a game project (menu buttons, tab buttons, popup buttons).
@@ -1026,6 +1039,23 @@ class UCommonTextBlock;
  *  - Change it at runtime with SetButtonLabel.
  * Appearance (colors, hover, pressed, selected) comes from the CommonButtonStyle asset the Blueprint
  * references. The framework ships no style and no art.
+ *
+ * Text style per state (one style asset drives every button):
+ *  CommonUI computes a "current text style" from the button style (Normal / Normal Hovered / Selected /
+ *  Selected Hovered / Disabled Text Style) but applies it to nothing. With bApplyStyleTextToLabel (default on)
+ *  this class applies it to LabelText whenever the state changes, so editing the CommonButtonStyle or the
+ *  CommonTextStyle assets restyles every button that uses them, with no Blueprint graph. A slot left empty in the
+ *  style keeps the text style already set on LabelText.
+ *
+ * Highlight (hover, keyboard / gamepad focus, selection):
+ *  CommonUI shows the hovered look only under the mouse. With bHighlightOnFocus (default on) a focused button is
+ *  "highlighted" too, so keyboard and controller navigation show the same feedback as the mouse: hovered text
+ *  style, and the optional widget named exactly SelectionIndicator (a bar, an arrow, a glow) becomes visible.
+ *  IsHighlighted and the event On Highlight Changed expose the state to Blueprint (animations, extra effects).
+ *
+ * Sounds: hover and click play through the audio system (UAudioFrameSubsystem, UI category). Each button can name its
+ * own cues; an empty cue uses the project default of the audio config. Leave the Hovered / Clicked sound slots of the
+ * CommonUI button style empty, otherwise a second sound plays next to this one.
  */
 UCLASS(Abstract, Blueprintable)
 class COREFRAMEWORK_API UBaseButton : public UCommonButtonBase
@@ -1039,23 +1069,247 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Base UI|Button")
 	FText GetButtonLabel() const { return ButtonLabel; }
 
+	/** True while the button is hovered, focused (bHighlightOnFocus) or selected, and enabled. */
+	UFUNCTION(BlueprintPure, Category = "Base UI|Button")
+	bool IsHighlighted() const { return bHighlighted; }
+
 protected:
 	virtual void NativePreConstruct() override;
+	virtual void NativeOnHovered() override;
+	virtual void NativeOnUnhovered() override;
+	virtual void NativeOnClicked() override;
+	virtual void NativeOnSelected(bool bBroadcast) override;
+	virtual void NativeOnDeselected(bool bBroadcast) override;
+	virtual void NativeOnEnabled() override;
+	virtual void NativeOnDisabled() override;
+	virtual void NativeOnCurrentTextStyleChanged() override;
+	virtual void HandleFocusReceived() override;
+	virtual void HandleFocusLost() override;
+
+	/** Cue played on hover. Empty uses Default Button Hover Cue of the audio config. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	FGameplayTag HoverCue;
+
+	/** Cue played on click. Empty uses Default Button Click Cue of the audio config. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	FGameplayTag ClickCue;
+
+	/** No sounds at all for this button (neither its own cues nor the project defaults). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Audio")
+	bool bSilent = false;
 
 	/** Fired whenever the label text is applied (designer preview, construct, SetButtonLabel). */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Base UI|Button", meta = (DisplayName = "On Button Label Changed"))
 	void BP_OnButtonLabelChanged(const FText& InLabel);
 
+	/** Fired when the highlight (hover, focus, selection) turns on or off. */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Base UI|Button", meta = (DisplayName = "On Highlight Changed"))
+	void BP_OnHighlightChanged(bool bIsHighlighted);
+
 	/** Text shown by the button. Editable on every placed instance in the Details panel. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Button")
 	FText ButtonLabel;
+
+	/**
+	 * Apply the text style of the current state (from the CommonButtonStyle of this button) to LabelText.
+	 * Turn it off only for a button whose Blueprint styles its text by itself.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Button")
+	bool bApplyStyleTextToLabel = true;
+
+	/** Keyboard / gamepad focus highlights the button like the mouse hover does (hovered text style, SelectionIndicator). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Button")
+	bool bHighlightOnFocus = true;
+
+	/** Visibility of SelectionIndicator while the button is highlighted. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Button")
+	ESlateVisibility IndicatorShownVisibility = ESlateVisibility::HitTestInvisible;
+
+	/** Visibility of SelectionIndicator while the button is not highlighted. Hidden keeps the layout, Collapsed removes it. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Button")
+	ESlateVisibility IndicatorHiddenVisibility = ESlateVisibility::Hidden;
 
 	/** Optional Common Text widget named exactly LabelText. */
 	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UCommonTextBlock> LabelText;
 
+	/** Optional widget named exactly SelectionIndicator. Visible only while the button is highlighted. */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UWidget> SelectionIndicator;
+
+	/** The text style LabelText should use now (state of the button + highlight). Null = leave LabelText as it is. */
+	virtual TSubclassOf<UCommonTextStyle> ResolveLabelTextStyle() const;
+
 private:
 	void ApplyLabel();
+
+	/** Recomputes the highlight and applies text style and indicator when anything changed. */
+	void RefreshVisualState();
+
+	bool bHasFocus = false;
+	bool bHighlighted = false;
+};
+```
+
+### 4.7b `Popups/BaseConfirmPopupWidget.h` — yes / no popup parent (v2.1)
+
+One parent for every confirmation dialog. The game registers its `WBP_Popup_Confirm` as a screen on the Modal layer and opens it with `OpenConfirmation(UIFrame, ScreenTag, Request, Callback)`; the popup fills `TitleText`, `MessageText` and the labels of `ConfirmButton` / `CancelButton`, focuses the safe button, answers exactly once (Back = Canceled, closed by anything else = Canceled) and closes itself before calling back.
+
+```cpp
+// CoreFramework UI System - Popups
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameplayTagContainer.h"
+#include "UISystem/Foundation/BaseActivatableWidget.h"
+#include "BaseConfirmPopupWidget.generated.h"
+
+class UBaseButton;
+class UCommonTextBlock;
+class UUIFrameSubsystem;
+
+/** The answer of a confirmation popup. */
+UENUM(BlueprintType)
+enum class EUIConfirmResult : uint8
+{
+	Confirmed,
+	/** Cancel button, Back action (Escape / gamepad B), or the popup was closed by something else. */
+	Canceled
+};
+
+/** What a confirmation popup shows. Every text left empty keeps what the popup Blueprint already displays. */
+USTRUCT(BlueprintType)
+struct COREFRAMEWORK_API FUIConfirmRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Confirm")
+	FText Title;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Confirm", meta = (MultiLine = "true"))
+	FText Message;
+
+	/** Label of the confirm button. Empty keeps the button's own Button Label. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Confirm")
+	FText ConfirmLabel;
+
+	/** Label of the cancel button. Empty keeps the button's own Button Label. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Confirm")
+	FText CancelLabel;
+
+	/**
+	 * Which button has keyboard / gamepad focus when the popup opens. Leave false for destructive actions
+	 * (delete, overwrite): a quick Enter / A press then cancels instead of destroying data.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Confirm")
+	bool bFocusConfirmButton = false;
+};
+
+/** Blueprint answer of a confirmation popup. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnUIConfirmResult, EUIConfirmResult, Result);
+
+/** C++ answer of a confirmation popup. */
+using FUIConfirmCallback = TFunction<void(EUIConfirmResult)>;
+
+/**
+ * Parent of every yes / no popup of a game project (WBP_Popup_Confirm).
+ *
+ * It is an ordinary screen: register it in DA_UIConfig > Screens on a modal layer (CoreFramework.UI.Layer.Modal) under a
+ * tag of the game (for example UI.Screen.ConfirmPopup). The game never creates it by hand; it asks:
+ *
+ *   C++        UBaseConfirmPopupWidget::OpenConfirmation(UIFrameSubsystem, ScreenTag, Request, [](EUIConfirmResult R){ ... });
+ *   Blueprint  Push Screen (tag), then on the widget: Setup Confirm (Request) and bind On Result.
+ *
+ * Widgets (all optional, auto-wired by name)
+ *   TitleText       Common Text   receives Request.Title
+ *   MessageText     Common Text   receives Request.Message
+ *   ConfirmButton   UBaseButton   answers Confirmed
+ *   CancelButton    UBaseButton   answers Canceled
+ *
+ * Behaviour
+ *   * Modal and Back Handler by default: the layers below receive no input, Escape / gamepad B answers Canceled.
+ *   * Exactly one answer per request. Closing the popup any other way (layer cleared, map change) answers Canceled.
+ *     A new request while one is pending cancels the pending one first.
+ *   * Focus lands on CancelButton unless the request asks for ConfirmButton (bFocusConfirmButton).
+ *   * The popup closes itself before the answer is delivered, so the caller may push another screen from the callback.
+ */
+UCLASS(Abstract, Blueprintable)
+class COREFRAMEWORK_API UBaseConfirmPopupWidget : public UBaseActivatableWidget
+{
+	GENERATED_BODY()
+
+public:
+	UBaseConfirmPopupWidget(const FObjectInitializer& ObjectInitializer);
+
+	/**
+	 * Pushes the popup screen registered under ScreenTag, fills it with Request and calls OnResult once with the answer.
+	 * If the screen cannot be opened (tag not registered, class is not a confirm popup) OnResult receives Canceled and a
+	 * warning is logged, so the caller never waits forever.
+	 */
+	static void OpenConfirmation(UUIFrameSubsystem* UIFrame, FGameplayTag ScreenTag, const FUIConfirmRequest& Request, FUIConfirmCallback OnResult);
+
+	/** Fills the popup. Call right after pushing it. A pending request is canceled first. */
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Confirm")
+	void SetupConfirm(const FUIConfirmRequest& Request);
+
+	/** C++ version with a callback (also broadcasts OnResult). */
+	void SetupConfirmNative(const FUIConfirmRequest& Request, FUIConfirmCallback OnResult);
+
+	/** Answers Confirmed and closes the popup. What ConfirmButton does. */
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Confirm")
+	void Confirm();
+
+	/** Answers Canceled and closes the popup. What CancelButton and the Back action do. */
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Confirm")
+	void Cancel();
+
+	/** True between SetupConfirm and the answer. */
+	UFUNCTION(BlueprintPure, Category = "Base UI|Confirm")
+	bool IsWaitingForAnswer() const { return bPending; }
+
+	UFUNCTION(BlueprintPure, Category = "Base UI|Confirm")
+	const FUIConfirmRequest& GetRequest() const { return CurrentRequest; }
+
+	/** The answer of the current request. Fires once per request. */
+	UPROPERTY(BlueprintAssignable, Category = "Base UI|Confirm")
+	FOnUIConfirmResult OnResult;
+
+protected:
+	virtual void NativeOnInitialized() override;
+	virtual void NativeOnDeactivated() override;
+	virtual bool NativeOnHandleBackAction() override;
+	virtual UWidget* ResolveDefaultFocusWidget() const override;
+
+	/** A request was applied to the widgets. Use it for extra visuals (an icon for destructive requests, an animation). */
+	UFUNCTION(BlueprintImplementableEvent, Category = "Base UI|Confirm", meta = (DisplayName = "On Request Set"))
+	void BP_OnRequestSet(const FUIConfirmRequest& Request);
+
+	/** Optional Common Text named exactly TitleText. */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UCommonTextBlock> TitleText;
+
+	/** Optional Common Text named exactly MessageText. */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UCommonTextBlock> MessageText;
+
+	/** Optional button named exactly ConfirmButton. */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UBaseButton> ConfirmButton;
+
+	/** Optional button named exactly CancelButton. */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UBaseButton> CancelButton;
+
+private:
+	void HandleConfirmClicked();
+	void HandleCancelClicked();
+
+	/** Delivers the answer once: clears the pending state, closes the popup (unless already closing), calls back. */
+	void Finish(EUIConfirmResult Result, bool bCloseScreen);
+
+	FUIConfirmRequest CurrentRequest;
+	FUIConfirmCallback PendingCallback;
+	bool bPending = false;
 };
 ```
 
@@ -1548,8 +1802,9 @@ Any visual design, any screen, HP / mana / ammo widgets, inventory, quest tracke
 | `HUD/` | `BaseHUD`, `BaseHUDWidget` (.h/.cpp each) | bootstrap actor, HUD container |
 | `Menu/` | `BaseMenuWidget.h/.cpp` | menu with tab bar |
 | `Menu/Tabs/` | `BaseTabWidget.h/.cpp` | tab page |
+| `Popups/` | `BaseConfirmPopupWidget.h/.cpp` | yes / no dialog parent (v2.1) |
 
-15 headers, 11 sources.
+16 headers, 12 sources.
 
 ### 9.2 Blueprint content
 

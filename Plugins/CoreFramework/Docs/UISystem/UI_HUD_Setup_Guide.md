@@ -99,10 +99,11 @@ Animations are also found by name: `Anim_Show` / `Anim_Hide` (`BaseUserWidget`),
 |---|---|---|
 | The gameplay HUD | `BaseHUDWidget` | Game input mode, HUD element slots. |
 | Main menu, pause menu, settings (any menu) | `BaseMenuWidget` | UI input mode, optional tab bar. |
-| A popup, a toast, any other screen on a layer | `BaseActivatableWidget` | Gets activation, input mode, focus, back handling. |
+| A yes / no confirmation popup | `BaseConfirmPopupWidget` | Title, message, Confirm / Cancel wired by name, one answer per request, Back = Cancel. |
+| Any other popup, a toast, any other screen on a layer | `BaseActivatableWidget` | Gets activation, input mode, focus, back handling. |
 | A tab page inside a menu | `BaseTabWidget` | Gets selected / deselected events and the Apply / Revert contract. |
 | A HUD element (health bar, minimap) or any small piece | `BaseUserWidget` | Can bind itself to the player's pawn. |
-| A button | `BaseButton` | Has the label text feature. |
+| A button | `BaseButton` | Label text, text style per state from the button style, focus highlight, optional `SelectionIndicator`. |
 | The *startup actor* that opens the first screens of a map (see 3.3) | `BaseHUD` | Starts and stops the UI for the local player. |
 
 There are **no** empty wrapper Blueprints such as `WBP_BaseHUD`. You use the C++ class directly as the parent.
@@ -189,6 +190,7 @@ Plugins/CoreFramework/Source/CoreFramework/UISystem/
 ├─ Layout/       BaseRootLayoutWidget.h/.cpp
 ├─ Foundation/   BaseUserWidget.h/.cpp, BaseActivatableWidget.h/.cpp, BaseButton.h/.cpp
 ├─ HUD/          BaseHUD.h/.cpp, BaseHUDWidget.h/.cpp
+├─ Popups/       BaseConfirmPopupWidget.h/.cpp
 └─ Menu/         BaseMenuWidget.h/.cpp
    └─ Tabs/      BaseTabWidget.h/.cpp
 ```
@@ -541,7 +543,18 @@ These live in **your game project** (`Content/UI/Components/`) so they are easy 
 
 *Why: this one asset gives every button all its visual states. You do not draw hover or pressed states yourself.*
 
-3. Duplicate it (right-click → **Duplicate**) and name the copy `BP_ButtonStyle_Tab`. Make its **Selected Base** clearly different from **Normal Base** (for example a brighter color), so the active tab is visible.
+3. Set the **text styles** of the same asset (each one a `CommonTextStyle`, see the text style above):
+
+   | Property | When `BaseButton` applies it to `LabelText` |
+   |---|---|
+   | **Normal Text Style** | idle |
+   | **Normal Hovered Text Style** | mouse over, **or** keyboard / gamepad focus |
+   | **Selected Text Style / Selected Hovered Text Style** | selected buttons (tabs) |
+   | **Disabled Text Style** | button disabled |
+
+   *Why: `BaseButton` switches the label to the text style of the current state, so "gray when idle, white when highlighted" is two text style assets and no graph. A slot left empty keeps the style set on `LabelText`.*
+
+4. Duplicate it (right-click → **Duplicate**) and name the copy `BP_ButtonStyle_Tab`. Make its **Selected Base** clearly different from **Normal Base** (for example a brighter color), so the active tab is visible.
 
 ### Button `WBP_Button_Primary`
 
@@ -552,7 +565,9 @@ These live in **your game project** (`Content/UI/Components/`) so they are easy 
 4. With `LabelText` selected, Details → **Slot (Overlay Slot)**: Horizontal Alignment = **Center**, Vertical Alignment = **Center**. Under **Style** choose `BP_TextStyle_Button`.
 5. Click **Graph**, then **Class Defaults**. In the search box type `Style`. Set **Style** to `BP_ButtonStyle_Primary`.
    *Why: the button background and states come from this property.*
-6. Compile, Save.
+6. Optional: add any widget (an Image used as a bar, an arrow) and name it **`SelectionIndicator`**. `BaseButton` shows it only while the button is highlighted (hovered, focused or selected). Class Defaults: **Indicator Hidden Visibility** = *Hidden* keeps its space (text does not move), *Collapsed* removes it.
+   Other Class Defaults: **Apply Style Text To Label** (on) and **Highlight On Focus** (on); untick only for a button whose graph styles its text itself.
+7. Compile, Save.
 
 ### Tab button `WBP_Button_Tab`
 
@@ -775,13 +790,30 @@ This is the most complex example; each part has one job.
 
 ## 4.5 A popup: `WBP_Popup_Confirm`
 
-1. In `Popups` create a Widget Blueprint with parent **BaseActivatableWidget** (a popup is not a menu), name `WBP_Popup_Confirm`.
-2. Layout: Overlay → **Border** (dark, semi-transparent, fills the screen) + centered panel with a text and two `WBP_Button_Primary` (**Yes**, **No**). Name **No** `DefaultFocusWidget`.
-   *Why No: the safe choice has focus, so an accidental Enter does not confirm.*
-3. Graph: **No → On Clicked → Close Screen**. **Yes →** your action, then **Close Screen**.
-4. **Class Defaults**: **Is Modal** = on, **Is Back Handler** = on, **Input Mode** = UI Only.
-   *Why Modal: while a modal is open, the screens below it do not react to input at all.*
+1. In `Popups` create a Widget Blueprint with parent **BaseConfirmPopupWidget** (a popup is not a menu), name `WBP_Popup_Confirm`.
+2. Layout: Overlay → **Border** (dark, semi-transparent, fills the screen) + centered panel with:
+   - a Common Text named **`TitleText`** and one named **`MessageText`** (Auto Wrap Text on);
+   - two `WBP_Button_Primary` named **`ConfirmButton`** (label *Yes*) and **`CancelButton`** (label *No*).
+   *Why these names: the parent finds them by name, writes the request into them and wires the clicks. No graph.*
+3. Class Defaults are already right (set by the parent): **Is Modal**, **Is Back Handler** (Escape / gamepad B = Cancel), **Input Mode** = UI Only. Focus lands on **Cancel** unless a request asks for Confirm.
+   *Why Cancel: the safe choice has focus, so an accidental Enter does not confirm a destructive action.*
+4. Register it in `DA_UIConfig` > Screens (4.6) on `CoreFramework.UI.Layer.Modal`, tag `UI.Screen.ConfirmPopup`.
 5. Compile, Save.
+6. Ask a question from game code:
+
+   ```cpp
+   FUIConfirmRequest Request;
+   Request.Title = NSLOCTEXT("Game", "DeleteTitle", "Delete save?");
+   Request.Message = NSLOCTEXT("Game", "DeleteMsg", "This cannot be undone.");
+   UBaseConfirmPopupWidget::OpenConfirmation(UIFrameSubsystem, ConfirmPopupTag, Request,
+       [WeakThis = TWeakObjectPtr<UMyWidget>(this)](EUIConfirmResult Result)
+       {
+           if (WeakThis.IsValid() && Result == EUIConfirmResult::Confirmed) { WeakThis->DoTheThing(); }
+       });
+   ```
+
+   Blueprint: **Push Screen** (the tag) → **On Screen Pushed** gives the widget → cast to `BaseConfirmPopupWidget` → **Setup Confirm** (Request) → bind **On Result**.
+   Each request gets exactly **one** answer: Confirm, Cancel, Back, or *Canceled* if the popup is closed any other way.
 
 ## 4.6 Tell the framework which screens exist
 

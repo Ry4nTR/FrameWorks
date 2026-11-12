@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/AudioComponent.h" // EAudioFaderCurve (FadeOutOrStop); without it the header only compiles in unity builds.
 #include "GameplayTagContainer.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "AudioSystem/Core/AudioTypes.h"

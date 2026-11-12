@@ -6,6 +6,7 @@
 #include "BaseSettingRowWidget.generated.h"
 
 class UCommonTextBlock;
+class UCommonTextStyle;
 class UWidget;
 
 /**
@@ -18,6 +19,8 @@ class UWidget;
  *  - Highlight: the optional widget FocusHighlight is visible while the row has keyboard / gamepad focus or the mouse,
  *    so the player always sees which line Left / Right will change. BP event On Row Highlight Changed for extra effects.
  *  - Focus: GetFocusTarget names the control that receives focus; FocusRow moves focus there.
+ *  - Label style per state (v2.2.1): Label Style / Highlighted Label Style / Disabled Label Style (CommonTextStyle assets)
+ *    are applied to LabelText when the state changes, so the highlighted line can turn bright / bold with no graph.
  *
  * The Blueprint may contain, by these exact names (optional):
  *   LabelText       (Common Text)  the label
@@ -76,6 +79,18 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Setting Row", meta = (MultiLine = true))
 	FText Description;
 
+	/** Text style of LabelText in the normal state. Empty: the style set on LabelText in the Blueprint is kept. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Setting Row|Style")
+	TSubclassOf<UCommonTextStyle> LabelStyle;
+
+	/** Text style of LabelText while the row is highlighted (focus or mouse). Empty: Label Style. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Setting Row|Style")
+	TSubclassOf<UCommonTextStyle> HighlightedLabelStyle;
+
+	/** Text style of LabelText while the row is disabled. Empty: Label Style. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Setting Row|Style")
+	TSubclassOf<UCommonTextStyle> DisabledLabelStyle;
+
 	/** Visibility of FocusHighlight while the row is highlighted. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Setting Row")
 	ESlateVisibility HighlightShownVisibility = ESlateVisibility::HitTestInvisible;
@@ -92,6 +107,7 @@ protected:
 
 private:
 	void RefreshHighlight();
+	void ApplyLabelStyle();
 
 	bool bHasFocus = false;
 	bool bHovered = false;

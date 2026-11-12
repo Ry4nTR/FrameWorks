@@ -24,6 +24,30 @@ void UBaseSettingRowWidget::NativePreConstruct()
 	{
 		FocusHighlight->SetVisibility(HighlightHiddenVisibility);
 	}
+	ApplyLabelStyle();
+}
+
+void UBaseSettingRowWidget::ApplyLabelStyle()
+{
+	if (!LabelText)
+	{
+		return;
+	}
+
+	TSubclassOf<UCommonTextStyle> Style = LabelStyle;
+	if (!GetIsEnabled() && DisabledLabelStyle)
+	{
+		Style = DisabledLabelStyle;
+	}
+	else if (bHighlighted && HighlightedLabelStyle)
+	{
+		Style = HighlightedLabelStyle;
+	}
+
+	if (Style)
+	{
+		LabelText->SetStyle(Style);
+	}
 }
 
 void UBaseSettingRowWidget::SetLabel(const FText& InLabel)
@@ -39,6 +63,8 @@ void UBaseSettingRowWidget::SetRowEnabled(bool bEnabled)
 {
 	SetIsEnabled(bEnabled);
 	OnRowEnabledChanged(bEnabled);
+	RefreshHighlight();
+	ApplyLabelStyle();
 }
 
 UWidget* UBaseSettingRowWidget::GetFocusTarget() const
@@ -95,5 +121,6 @@ void UBaseSettingRowWidget::RefreshHighlight()
 	{
 		FocusHighlight->SetVisibility(bHighlighted ? HighlightShownVisibility : HighlightHiddenVisibility);
 	}
+	ApplyLabelStyle();
 	BP_OnRowHighlightChanged(bHighlighted);
 }

@@ -5,6 +5,7 @@
 #include "Components/WidgetSwitcher.h"
 #include "Engine/AssetManager.h"
 #include "Engine/StreamableManager.h"
+#include "Kismet/GameplayStatics.h"
 #include "UISystem/Menu/Tabs/BaseTabWidget.h"
 #include "UISystem/Data/UIConfigDataAsset.h"
 #include "UISystem/Foundation/BaseButton.h"
@@ -60,11 +61,22 @@ void UBaseMenuWidget::NativeDestruct()
 
 void UBaseMenuWidget::NativeOnActivated()
 {
+	// Super applies this screen's own pause first (a pause menu), so the background sees the final state.
 	Super::NativeOnActivated();
+
+	RefreshPausedBackground();
 
 	if (!bTabsBuilt && !bTabsLoading)
 	{
 		RebuildTabs();
+	}
+}
+
+void UBaseMenuWidget::RefreshPausedBackground()
+{
+	if (PausedBackground)
+	{
+		PausedBackground->SetVisibility(UGameplayStatics::IsGamePaused(this) ? PausedBackgroundVisibility : ESlateVisibility::Collapsed);
 	}
 }
 

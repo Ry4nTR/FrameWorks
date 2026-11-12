@@ -23,6 +23,14 @@ struct FStreamableHandle;
  *   DefaultTabSet (assigned on this widget)  <  UUIFrameSubsystem::RegisterMenuTab (runtime, plugins / game features)
  * Later sources override earlier ones by TabId, so a project can replace or disable (bEnabled = false)
  * a tab provided by another source. Tab content classes are async loaded.
+ *
+ * Tab transition: make TabSwitcher a Common Animated Switcher and set its Transition Type (Fade Only),
+ * Transition Curve and Transition Duration. The content of the old tab fades out, the new one fades in.
+ *
+ * Background (v2.2): an optional widget named exactly PausedBackground (Background Blur, dim image) is shown only while
+ * the game is paused when the menu activates. The same Settings screen therefore keeps the blurred look when it is
+ * opened from the Pause Menu (which keeps the game paused while covered) and shows the live level when it is opened
+ * from the Main Menu.
  */
 UCLASS(Abstract, Blueprintable)
 class COREFRAMEWORK_API UBaseMenuWidget : public UBaseActivatableWidget
@@ -87,6 +95,18 @@ protected:
 	/** Optional Widget Switcher (or Common Animated Switcher) named exactly TabSwitcher. Hosts the tab content. */
 	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UWidgetSwitcher> TabSwitcher;
+
+	/** Optional widget named exactly PausedBackground. Visible only while the game is paused (see class comment). */
+	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UWidget> PausedBackground;
+
+	/** Visibility of PausedBackground while the game is paused. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Menu")
+	ESlateVisibility PausedBackgroundVisibility = ESlateVisibility::HitTestInvisible;
+
+	/** Shows or hides PausedBackground from the current pause state. Called on every activation. */
+	UFUNCTION(BlueprintCallable, Category = "Base UI|Menu")
+	void RefreshPausedBackground();
 
 private:
 	UFUNCTION()

@@ -94,6 +94,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Base UI|Screens")
 	void ClearLayer(FGameplayTag LayerTag);
 
+	/** The container (stack / queue) of a layer of the root layout. Null before the root layout exists or for an unknown tag. */
+	UFUNCTION(BlueprintPure, Category = "Base UI|Screens")
+	UCommonActivatableWidgetContainerBase* GetLayer(FGameplayTag LayerTag) const;
+
 	UFUNCTION(BlueprintPure, Category = "Base UI|Screens")
 	bool IsScreenOpen(FGameplayTag ScreenTag) const;
 

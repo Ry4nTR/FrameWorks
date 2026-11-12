@@ -15,6 +15,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
 #include "Character/InputConfigData.h"
+#include "InputSystem/Manager/InputFrameSubsystem.h"
 #include "Movement/BaseCharacterMovementComponent.h"
 #include "StateMachine/StateMachineComponent.h"
 #include "GameFramework/Controller.h"
@@ -336,10 +337,23 @@ void ABaseCharacter::Input_Move(const FInputActionValue& Value)
 
 void ABaseCharacter::Input_Look(const FInputActionValue& Value)
 {
-	if (CameraManager)
+	if (!CameraManager)
 	{
-		CameraManager->AddLookInput(Value.Get<FVector2D>());
+		return;
 	}
+
+	FVector2D LookAxis = Value.Get<FVector2D>();
+
+	// Player preferences (Controls settings page): per-device sensitivity and axis inversion.
+	if (bApplyInputPreferences)
+	{
+		if (const UInputFrameSubsystem* InputFrame = UInputFrameSubsystem::Get(this))
+		{
+			LookAxis = InputFrame->ApplyLookPreferences(LookAxis);
+		}
+	}
+
+	CameraManager->AddLookInput(LookAxis);
 }
 
 void ABaseCharacter::Input_JumpStarted(const FInputActionValue& Value)

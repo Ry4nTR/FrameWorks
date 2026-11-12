@@ -3,6 +3,7 @@
 
 #include "Animation/WidgetAnimation.h"
 #include "Components/Widget.h"
+#include "Widgets/CommonActivatableWidgetContainer.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Input/CommonUIInputTypes.h"
@@ -38,6 +39,26 @@ void UBaseActivatableWidget::SetScreenContext(FGameplayTag InScreenTag, FGamepla
 	ScreenTag = InScreenTag;
 	LayerTag = InLayerTag;
 	bScreenOpen = true;
+
+	// Containers pool their widgets: a reused instance must start clean.
+	bCovered = false;
+	bOpenCuePlayed = false;
+}
+
+bool UBaseActivatableWidget::IsBelowAnotherScreenOnLayer() const
+{
+	const UUIFrameSubsystem* Subsystem = GetUIFrameSubsystem();
+	const UCommonActivatableWidgetContainerBase* Layer = Subsystem ? Subsystem->GetLayer(LayerTag) : nullptr;
+	if (!Layer)
+	{
+		return false;
+	}
+
+	// A stack adds the new widget to its list BEFORE it deactivates the one below, and removes a closing widget only
+	// after its deactivation. So while deactivating: a widget above us = we are being covered; none = we are closing.
+	const TArray<UCommonActivatableWidget*>& Widgets = Layer->GetWidgetList();
+	const int32 Index = Widgets.IndexOfByKey(this);
+	return Index != INDEX_NONE && Index < Widgets.Num() - 1;
 }
 
 void UBaseActivatableWidget::CloseScreen()
@@ -78,8 +99,10 @@ void UBaseActivatableWidget::NativeDestruct()
 
 	// Safety net: the engine deactivates before destruct, but input suppression and pause are
 	// reference counted on the controller, so make sure they can never leak.
+	// Also the end of a screen that was closed while covered (ClearLayer, PopScreen of a lower screen).
 	ReleaseActiveSideEffects();
 	bScreenOpen = false;
+	bCovered = false;
 
 	Super::NativeDestruct();
 }
@@ -88,16 +111,19 @@ void UBaseActivatableWidget::NativeOnActivated()
 {
 	Super::NativeOnActivated();
 
-	// bScreenOpen is true only for the first activation after the push. CommonUI also re-activates a screen that was
-	// covered by another one on the same stack; that must not play the open sound again.
-	if (bScreenOpen && (ActivatedCue.IsValid() || bUseDefaultScreenCues))
+	// The open sound plays once per push. CommonUI also re-activates a screen that was covered by another one on the
+	// same stack; that must not play the open sound again.
+	if (bScreenOpen && !bOpenCuePlayed && (ActivatedCue.IsValid() || bUseDefaultScreenCues))
 	{
 		if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
 		{
 			Audio->PlayUIEvent(EAudioUIEvent::ScreenOpen, ActivatedCue);
 		}
 	}
+	bOpenCuePlayed = true;
+	bCovered = false;
 
+	// Idempotent: effects kept while covered are not applied twice.
 	ApplyActiveSideEffects();
 
 	if (Anim_Activate)
@@ -110,16 +136,30 @@ void UBaseActivatableWidget::NativeOnActivated()
 
 void UBaseActivatableWidget::NativeOnDeactivated()
 {
-	ReleaseActiveSideEffects();
-
-	if (bScreenOpen && (DeactivatedCue.IsValid() || bUseDefaultScreenCues))
+	if (bScreenOpen && IsBelowAnotherScreenOnLayer())
 	{
-		if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
+		// Covered by a newer screen of the same stack: still open. Pause and suppression stay unless the class opts out.
+		bCovered = true;
+		if (!bKeepActiveEffectsWhileCovered)
 		{
-			Audio->PlayUIEvent(EAudioUIEvent::ScreenClose, DeactivatedCue);
+			ReleaseActiveSideEffects();
 		}
 	}
-	bScreenOpen = false;
+	else
+	{
+		// Really closing.
+		ReleaseActiveSideEffects();
+
+		if (bScreenOpen && (DeactivatedCue.IsValid() || bUseDefaultScreenCues))
+		{
+			if (UAudioFrameSubsystem* Audio = UAudioFrameSubsystem::Get(this))
+			{
+				Audio->PlayUIEvent(EAudioUIEvent::ScreenClose, DeactivatedCue);
+			}
+		}
+		bScreenOpen = false;
+		bCovered = false;
+	}
 
 	if (Anim_Deactivate)
 	{

@@ -1,0 +1,17 @@
+﻿# Unreal Engine build output of the plugin. Generated when a project compiles it; never commit it.
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+
+# IDE / OS files
+.vs/
+.vscode/
+.idea/
+*.VC.db
+*.VC.opendb
+*.sln
+*.suo
+*.user
+.DS_Store
+Thumbs.db

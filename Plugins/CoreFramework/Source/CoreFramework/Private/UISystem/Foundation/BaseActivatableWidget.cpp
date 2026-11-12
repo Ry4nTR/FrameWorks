@@ -228,6 +228,18 @@ UWidget* UBaseActivatableWidget::ResolveDefaultFocusWidget() const
 	return DefaultFocusWidget;
 }
 
+UWidget* UBaseActivatableWidget::NativeGetDesiredFocusTarget() const
+{
+	// Super returns the Blueprint "Get Desired Focus Target" when a screen implements it: that still wins.
+	if (UWidget* BlueprintTarget = Super::NativeGetDesiredFocusTarget())
+	{
+		return BlueprintTarget;
+	}
+	// The same widget the deferred ApplyDefaultFocus would pick, given to CommonUI directly. ScheduleDefaultFocus stays as
+	// the fallback for content built after activation (tabs streamed in, rows created later).
+	return ResolveDefaultFocusWidget();
+}
+
 void UBaseActivatableWidget::ScheduleDefaultFocus()
 {
 	// Deferred one tick: CommonUI applies the widget's own desired focus target during activation.

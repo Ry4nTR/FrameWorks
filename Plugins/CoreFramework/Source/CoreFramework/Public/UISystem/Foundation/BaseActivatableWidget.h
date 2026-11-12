@@ -116,6 +116,13 @@ protected:
 	/** Widget that receives focus when the screen opens. Falls back to the Blueprint "Get Desired Focus Target" if implemented. */
 	virtual UWidget* ResolveDefaultFocusWidget() const;
 
+	/**
+	 * v2.2.2: CommonUI asks this every time the screen becomes the top one (activation, return from a screen that covered
+	 * it, input device switch). Without an answer it focuses the game viewport and a controller selects nothing. Answers
+	 * the Blueprint "Get Desired Focus Target" if implemented, else ResolveDefaultFocusWidget().
+	 */
+	virtual UWidget* NativeGetDesiredFocusTarget() const override;
+
 	// ---- Input -----------------------------------------------------------------------------------
 
 	/** Input routing requested while this screen is the topmost active screen. */

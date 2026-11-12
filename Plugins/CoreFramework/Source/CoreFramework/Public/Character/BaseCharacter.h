@@ -13,7 +13,8 @@
 //   depend on the missing piece are skipped.
 //
 // INPUT ROUTING (the movement component decides, this class only forwards)
-//   Look     Forwarded to the camera manager.
+//   Look     Scaled by the player's input preferences (UInputFrameSubsystem: mouse / gamepad sensitivity, invert X / Y)
+//            when bApplyInputPreferences is on, then forwarded to the camera manager.
 //   Move     Ground: planar along camera yaw.  Fly / Water, Standard: planar along camera yaw.
 //            Fly / Water, Sprint held (Camera Steering): full 3D along the camera, pitch included.
 //   Jump     Ground: jump.  Airborne (falling): take off into flight.  Fly / Water, Standard: ascend while held.
@@ -144,6 +145,14 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Input")
 	TObjectPtr<UInputConfigData> InputConfig;
+
+	/**
+	 * Apply the player's input preferences of the input system (UInputFrameSubsystem: mouse sensitivity, gamepad
+	 * sensitivity, invert X, invert Y) to look input before it reaches the camera manager. The values come from the
+	 * Controls settings page. Turn off for a character that handles look preferences itself.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Character|Input")
+	bool bApplyInputPreferences = true;
 
 	/**
 	 * Pressing Jump while airborne (falling) starts flight. Ignored when the Fly domain is disabled,

@@ -20,6 +20,7 @@ Shared behavior:
 
 - **Label**: the `Label` property of each placed row (visible in the designer).
 - **Highlight**: `FocusHighlight` is visible while the row has keyboard / gamepad focus or the mouse.
+- **Label style per state (v2.2.1)**: `Label Style`, `Highlighted Label Style`, `Disabled Label Style` (Common Text Style classes, Class Defaults of the row Blueprint) are applied to `LabelText` when the row changes state, so the highlighted line turns bright / bold and a disabled line greys out with no graph. Empty: the style set on `LabelText` in the Blueprint is kept (highlighted / disabled fall back to `Label Style`).
 - **Focus**: the control (slider, selector, binding box) is focusable, the row is not. Up / Down move between rows (Slate navigation). Left / Right change the value: sliders by one step (no "press Accept to lock"), option rows through `NativeOnNavigation` on the row. The option arrows are mouse-only (never focusable).
 - **Values from code**: `SetValue`, `SetOptions`, `SetSelectedIndex`, `SetIsOn` never broadcast unless asked (`bBroadcast`), so pages can refresh rows without loops.
 

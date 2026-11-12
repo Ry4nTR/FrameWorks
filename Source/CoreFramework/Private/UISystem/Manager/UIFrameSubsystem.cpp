@@ -439,6 +439,11 @@ void UUIFrameSubsystem::ClearLayer(FGameplayTag LayerTag)
 	}
 }
 
+UCommonActivatableWidgetContainerBase* UUIFrameSubsystem::GetLayer(FGameplayTag LayerTag) const
+{
+	return (RootLayout && LayerTag.IsValid()) ? RootLayout->FindLayer(LayerTag) : nullptr;
+}
+
 bool UUIFrameSubsystem::IsScreenOpen(FGameplayTag ScreenTag) const
 {
 	return GetScreenWidget(ScreenTag) != nullptr;

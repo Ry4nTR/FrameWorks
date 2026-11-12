@@ -32,6 +32,12 @@ class UWidgetAnimation;
  *
  * Back action: tick "Is Back Handler" in the Blueprint class defaults of screens that Escape / gamepad B should close.
  * Modal screens: tick "Is Modal" in the class defaults.
+ *
+ * Covered vs closed (v2.2):
+ *  A screen pushed on top of another screen of the same layer stack (Pause Menu -> Settings) deactivates the screen
+ *  below. That screen is only COVERED: it stays open (IsScreenOpen true), keeps its pause and input suppression
+ *  (bKeepActiveEffectsWhileCovered) and plays neither its close cue now nor its open cue again when it is uncovered.
+ *  Everything is released when the screen is really closed (back action, CloseScreen, PopScreen, ClearLayer).
  */
 UCLASS(Abstract, Blueprintable)
 class COREFRAMEWORK_API UBaseActivatableWidget : public UCommonActivatableWidget, public IBaseUIBinderInterface
@@ -54,9 +60,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Base UI|Screen")
 	FGameplayTag GetLayerTag() const { return LayerTag; }
 
-	/** True from the moment the subsystem pushed this screen until it deactivates. */
+	/** True from the moment the subsystem pushed this screen until it is closed. A screen covered by another one stays open. */
 	UFUNCTION(BlueprintPure, Category = "Base UI|Screen")
 	bool IsScreenOpen() const { return bScreenOpen; }
+
+	/** True while another screen of the same layer stack is on top of this one (this screen is open but not active). */
+	UFUNCTION(BlueprintPure, Category = "Base UI|Screen")
+	bool IsCoveredByAnotherScreen() const { return bCovered; }
 
 	/** Removes this screen from its layer through the UI subsystem. Safe to call from Blueprint buttons. */
 	UFUNCTION(BlueprintCallable, Category = "Base UI|Screen")
@@ -128,6 +138,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Input")
 	bool bPauseGameWhileActive = false;
 
+	/**
+	 * Keep the pause and the look / move suppression while another screen of the same layer covers this one
+	 * (for example Settings opened from the Pause Menu: the game stays paused). Released when this screen closes.
+	 * Turn off to get the pre-2.2 behavior (effects released while covered, applied again when uncovered).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base UI|Input")
+	bool bKeepActiveEffectsWhileCovered = true;
+
 	/** Optional widget named exactly DefaultFocusWidget. Receives focus on activation. */
 	UPROPERTY(BlueprintReadOnly, Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UWidget> DefaultFocusWidget;
@@ -171,9 +189,16 @@ private:
 	void ApplyActiveSideEffects();
 	void ReleaseActiveSideEffects();
 
+	/** True when this widget sits below another widget of its layer container (it is being covered, not closed). */
+	bool IsBelowAnotherScreenOnLayer() const;
+
 	FGameplayTag ScreenTag;
 	FGameplayTag LayerTag;
 	bool bScreenOpen = false;
+	bool bCovered = false;
+
+	/** The open cue plays once per push, not again when the screen is uncovered. */
+	bool bOpenCuePlayed = false;
 
 	TWeakObjectPtr<APlayerController> SuppressedController;
 	bool bLookSuppressed = false;

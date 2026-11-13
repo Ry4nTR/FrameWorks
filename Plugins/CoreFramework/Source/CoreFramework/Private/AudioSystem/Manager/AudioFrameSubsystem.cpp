@@ -289,9 +289,12 @@ void UAudioFrameSubsystem::ApplyCategoryVolume(FGameplayTag Category, float Fade
 
 	const float Volume = MutedCategories.Contains(Category) ? 0.0f : GetCategoryVolume(Category);
 
-	// bApplyToChildren stays false on purpose: the Sound Class hierarchy already multiplies a parent's volume into
-	// its children, so applying it to the children as well would count Master twice.
-	UGameplayStatics::SetSoundMixClassOverride(World, ActiveMix, SoundClass->Get(), Volume, 1.0f, FadeTime, /*bApplyToChildren=*/false);
+	// bApplyToChildren must be true. The audio device first resets every class to its asset properties and propagates them
+	// down the hierarchy (FAudioDevice::ParseSoundClasses), and only THEN applies the sound mix adjusters
+	// (ApplyClassAdjusters). An adjuster without "apply to children" therefore changes only its own class: the Master slider
+	// reached nothing, because every sound lives in a child class (SFX, Music, Ambient, UI). Each category has one adjuster
+	// on its own class, so applying them recursively multiplies Master into the children exactly once.
+	UGameplayStatics::SetSoundMixClassOverride(World, ActiveMix, SoundClass->Get(), Volume, 1.0f, FadeTime, /*bApplyToChildren=*/true);
 }
 
 FGameplayTag UAudioFrameSubsystem::ResolveCategory(const FAudioCueDefinition* Cue, FGameplayTag Fallback) const

@@ -78,6 +78,22 @@ void UInputPromptWidget::SetLabel(const FText& NewLabel)
 	RefreshPrompt();
 }
 
+void UInputPromptWidget::SetCollapseWhenNoKey(bool bCollapse)
+{
+	if (bCollapseWhenNoKey == bCollapse)
+	{
+		return;
+	}
+
+	bCollapseWhenNoKey = bCollapse;
+	if (!bCollapseWhenNoKey && !IsDesignTime())
+	{
+		// The rule may have collapsed the prompt: it no longer applies.
+		SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	}
+	RefreshPrompt();
+}
+
 void UInputPromptWidget::RefreshPrompt()
 {
 	const UInputFrameSubsystem* Input = BoundInput.Get();

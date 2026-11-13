@@ -54,7 +54,7 @@ Same convention as `UI_HUD_Setup_Guide.md`:
 4. Leave **Volume** at `1.0` on all of them. The framework changes volume at runtime through a Sound Mix; do not set it to a value you want to control from the options menu.
 5. Optional: on `SC_UI` tick **Is UI Sound** (it keeps the class audible in pause menus; the framework also does this by itself for the UI category).
 
-Why a hierarchy: **Master scales every child automatically.** The framework never applies Master to the children itself.
+Why a hierarchy: **Master scales every child.** The framework applies each category's mix adjuster to its class *and its children*, so moving Master moves every category below it.
 
 In a game project, assign these classes **also on the game's sound assets** (Sound Wave, Sound Cue, MetaSound > Sound Class), where practical. Sounds played through the framework get the right class anyway, but a placed Ambient Sound actor, or a sound played by an engine feature, only follows the sliders if its asset carries a class. The classes are listed under *Plugins > CoreFramework Content > Audio > Classes* in the game's Content Browser.
 

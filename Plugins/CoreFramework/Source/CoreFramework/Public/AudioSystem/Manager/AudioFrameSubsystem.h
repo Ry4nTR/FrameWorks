@@ -164,6 +164,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Audio|Handle")
 	void SetHandleIntParameter(FAudioHandle Handle, FName ParameterName, int32 Value);
 
+	/**
+	 * C++ access to the Audio Component behind a handle, for what the handle functions do not cover (attenuation set by code,
+	 * a submix send). Null while the cue is still loading, after the sound ended, or for a stale handle. Do not keep the pointer.
+	 */
+	UAudioComponent* GetHandleComponent(FAudioHandle Handle) const { return ResolveHandle(Handle); }
+
 	// ---- Music and ambience (crossfaded layers) --------------------------------------------------------
 
 	/**

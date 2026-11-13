@@ -99,8 +99,8 @@ The Sound Class hierarchy is created by you in the editor (see `Audio_Engine_Set
 
 1. The subsystem keeps one volume (0..1) and one mute flag per category.
 2. On the first sound of a world, and again for every new world, it sets a **base Sound Mix** on that world's audio device. If the config names no mix, an internal empty mix is used. The mix only carries the volumes.
-3. `SetCategoryVolume` calls `SetSoundMixClassOverride(Mix, SoundClass, Volume, ... bApplyToChildren = false)`.
-4. `bApplyToChildren` stays **false on purpose**. The engine already multiplies a parent Sound Class volume into its children. Applying the override to children as well would count Master twice.
+3. `SetCategoryVolume` calls `SetSoundMixClassOverride(Mix, SoundClass, Volume, ... bApplyToChildren = true)`.
+4. `bApplyToChildren` is **true on purpose**. The audio device propagates the Sound Class *asset* properties down the hierarchy first and applies the sound mix adjusters afterwards, so an adjuster that does not apply to children changes only its own class (with `false`, the Master slider reached no sound at all: every sound lives in a child class). One adjuster per category class, applied recursively, multiplies Master into each child exactly once. (Fixed 2026-11-13.)
 5. **Master** therefore scales every other category without any code of its own.
 
 ### Forced category

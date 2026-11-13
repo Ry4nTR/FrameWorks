@@ -52,6 +52,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Input Prompt")
 	void SetLabel(const FText& NewLabel);
 
+	/**
+	 * Collapse the whole prompt when the current device has no key for it (see Collapse When No Key). For prompts created at
+	 * runtime by a list (HUD interaction prompts). Turning it off makes the prompt visible again.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Input Prompt")
+	void SetCollapseWhenNoKey(bool bCollapse);
+
 	/** Looks up the key and icon again (done automatically on device and binding changes). */
 	UFUNCTION(BlueprintCallable, Category = "Input Prompt")
 	void RefreshPrompt();
